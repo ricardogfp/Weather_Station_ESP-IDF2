@@ -1,14 +1,15 @@
 #pragma once
 
 #include "esp_err.h"
+#include "secrets.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // Home Assistant configuration
-#define HOME_ASSISTANT_URL "http://192.168.6.11:8123"
-#define HOME_ASSISTANT_TOKEN "asdasdaso"  // Replace with your actual token
+extern const char *HOME_ASSISTANT_URL;
+extern const char *HOME_ASSISTANT_TOKEN;
 
 /**
  * @brief Initialize Home Assistant client

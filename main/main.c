@@ -8,7 +8,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
-
+#include "secrets.h"
 // Suppress unused variable warnings
 #define SUPPRESS_UNUSED_WARNING(x) (void)(x)
 #include "esp_log.h"
@@ -84,15 +84,24 @@ static void set_weather_icon(const char* code, lv_obj_t* imgObj) {
     ESP_LOGI(CLOCK_TAG, "Icon set successfully for code: %s", icon_code);
 }
 
-// OpenWeatherMap configuration - customize these values
-// Sign up at https://openweathermap.org/api to get your own API key
-const char *openWeatherMapApiKey = "b2c0beef44dd157da425e740c95d37d0";  // Replace with your actual API key
-const char *lat = "40.68";                        // Default: San Francisco - change to your location
-const char *lon = "-3.62";                      // Default: San Francisco - change to your location
+// OpenWeatherMap configuration
+static const char *openWeatherMapApiKey = OPENWEATHER_API_KEY;
+static const char *lat = OPENWEATHER_LAT;
+static const char *lon = OPENWEATHER_LON;
 
-// WiFi credentials - modify these for your network
-#define WIFI_SSID "Kailua"
-#define WIFI_PASSWORD "S4mL30v4N3_R"
+// Initialize weather client
+static void init_weather_client(void) {
+    weather_client_init(openWeatherMapApiKey, lat, lon);
+    ESP_LOGI(CLOCK_TAG, "Weather client initialized with lat: %s, lon: %s", lat, lon);
+}
+
+// WiFi credentials
+const char *wifi_ssid = WIFI_SSID;
+const char *wifi_password = WIFI_PASSWORD;
+
+// Home Assistant configuration
+const char *HOME_ASSISTANT_URL = HA_URL;
+const char *HOME_ASSISTANT_TOKEN = HA_TOKEN;
 
 // Flag indicating time source
 #define TIME_SOURCE_INTERNAL 0
@@ -236,170 +245,42 @@ static void update_time_display(void)
 }
 
 /**
- * @brief Update weather data and UI
+ * @brief Update weather data and UI with current temperature only
  */
 static void update_weather_data(void)
 {
-    // Get current date and time first
-    get_date_time();
-
     // Try to fetch data from OpenWeatherMap
-    esp_err_t result = get_data_from_openweathermap();
+    esp_err_t result = weather_client_update();
     if (result != ESP_OK) {
         ESP_LOGW(CLOCK_TAG, "Failed to fetch weather data: %s", esp_err_to_name(result));
-    } else {
-        ESP_LOGI(CLOCK_TAG, "Weather data updated successfully");
+        return; // Exit if we couldn't fetch data
     }
+    
+    ESP_LOGI(CLOCK_TAG, "Weather data updated successfully");
 
-    // Update the UI with new data (whether fetched or cached)
+    // Update the UI with the current temperature
     if (lvgl_port_lock(-1)) {
-        // Update temperature labels
-        char temp_str[16];
+        // Get current temperature
+        float current_temp = weather_client_get_temperature();
         
-        // Current temperature
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", currentWeather.temperature);
-        lv_label_set_text(objects.label_current_temperature, temp_str);
-        lv_label_set_text(objects.label_current_temperature_1, temp_str);
-        
-        // Min/Max temperatures
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", currentWeather.temp_min);
-        lv_label_set_text(objects.label_current_temp_min, temp_str);
-        lv_label_set_text(objects.label_current_temp_min_1, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", currentWeather.temp_max);
-        lv_label_set_text(objects.label_current_temp_max, temp_str);
-        lv_label_set_text(objects.label_current_temp_max_1, temp_str);
-        
-        // Update weather description
-        lv_label_set_text(objects.label_weather_description, str_Weather_Description);
-        lv_label_set_text(objects.label_weather_description_1, str_Weather_Description);
-        
-        // Update city name (placeholder for now)
-        lv_label_set_text(objects.label_city, "San Francisco");
-        lv_label_set_text(objects.label_city_1, "San Francisco");
-        
-        // Update hourly labels
-        // Hours
-        lv_label_set_text(objects.label_1h, get_future_hour(1));
-        lv_label_set_text(objects.label_2h, get_future_hour(2));
-        lv_label_set_text(objects.label_3h, get_future_hour(3));
-        lv_label_set_text(objects.label_4h, get_future_hour(4));
-        lv_label_set_text(objects.label_5h, get_future_hour(5));
-        lv_label_set_text(objects.label_6h, get_future_hour(6));
-        lv_label_set_text(objects.label_7h, get_future_hour(7));
-        
-        // Hourly temperatures
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", hourlyWeather.hours[0].temperature);
-        lv_label_set_text(objects.label_1h_temperature, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", hourlyWeather.hours[1].temperature);
-        lv_label_set_text(objects.label_2h_temperature, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", hourlyWeather.hours[2].temperature);
-        lv_label_set_text(objects.label_3h_temperature, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", hourlyWeather.hours[3].temperature);
-        lv_label_set_text(objects.label_4h_temperature, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", hourlyWeather.hours[4].temperature);
-        lv_label_set_text(objects.label_5h_temperature, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", hourlyWeather.hours[5].temperature);
-        lv_label_set_text(objects.label_6h_temperature, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", hourlyWeather.hours[6].temperature);
-        lv_label_set_text(objects.label_7h_temperature, temp_str);
-        
-        // Update daily labels
-        // Days
-        lv_label_set_text(objects.label_1d, get_future_date(1));
-        lv_label_set_text(objects.label_2d, get_future_date(2));
-        lv_label_set_text(objects.label_3d, get_future_date(3));
-        lv_label_set_text(objects.label_4d, get_future_date(4));
-        lv_label_set_text(objects.label_5d, get_future_date(5));
-        lv_label_set_text(objects.label_6d, get_future_date(6));
-        lv_label_set_text(objects.label_7d, get_future_date(7));
-        
-        // Daily max temperatures
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[0].temp_max);
-        lv_label_set_text(objects.label_1d_temp_max, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[1].temp_max);
-        lv_label_set_text(objects.label_2d_temp_max, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[2].temp_max);
-        lv_label_set_text(objects.label_3d_temp_max, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[3].temp_max);
-        lv_label_set_text(objects.label_4d_temp_max, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[4].temp_max);
-        lv_label_set_text(objects.label_5d_temp_max, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[5].temp_max);
-        lv_label_set_text(objects.label_6d_temp_max, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[6].temp_max);
-        lv_label_set_text(objects.label_7d_temp_max, temp_str);
-        
-        // Daily min temperatures
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[0].temp_min);
-        lv_label_set_text(objects.label_1d_temp_min, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[1].temp_min);
-        lv_label_set_text(objects.label_2d_temp_min, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[2].temp_min);
-        lv_label_set_text(objects.label_3d_temp_min, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[3].temp_min);
-        lv_label_set_text(objects.label_4d_temp_min, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[4].temp_min);
-        lv_label_set_text(objects.label_5d_temp_min, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[5].temp_min);
-        lv_label_set_text(objects.label_6d_temp_min, temp_str);
-        
-        snprintf(temp_str, sizeof(temp_str), "%.1f°C", dailyWeather.days[6].temp_min);
-        lv_label_set_text(objects.label_7d_temp_min, temp_str);
-        
-        // Update weather icons using the new getter functions
-        const char* current_icon = get_weather_icon_code_current();
-        set_weather_icon(current_icon, objects.image_current_weather_icon);
-        set_weather_icon(current_icon, objects.image_current_weather_icon_1);
-        
-        // Update hourly icons
-        for (int i = 0; i < 7; i++) {
-            const char* icon_code = get_weather_icon_code_hourly(i);
-            switch (i) {
-                case 0: set_weather_icon(icon_code, objects.image_1h_weather_icon); break;
-                case 1: set_weather_icon(icon_code, objects.image_2h_weather_icon); break;
-                case 2: set_weather_icon(icon_code, objects.image_3h_weather_icon); break;
-                case 3: set_weather_icon(icon_code, objects.image_4h_weather_icon); break;
-                case 4: set_weather_icon(icon_code, objects.image_5h_weather_icon); break;
-                case 5: set_weather_icon(icon_code, objects.image_6h_weather_icon); break;
-                case 6: set_weather_icon(icon_code, objects.image_7h_weather_icon); break;
-            }
+        // Only update if we have a valid temperature
+        if (!isnan(current_temp)) {
+            char temp_str[16];
+            snprintf(temp_str, sizeof(temp_str), "%.1f°C", current_temp);
+            lv_label_set_text(objects.label_current_temperature, temp_str);
+            lv_label_set_text(objects.label_current_temperature_1, temp_str);
+            
+            // Log the temperature update
+            ESP_LOGI(CLOCK_TAG, "Updated temperature to: %s", temp_str);
+        } else {
+            ESP_LOGW(CLOCK_TAG, "Received invalid temperature value");
         }
         
-        // Update daily icons
-        for (int i = 0; i < 7; i++) {
-            const char* icon_code = get_weather_icon_code_daily(i);
-            switch (i) {
-                case 0: set_weather_icon(icon_code, objects.image_1d_weather_icon); break;
-                case 1: set_weather_icon(icon_code, objects.image_2d_weather_icon); break;
-                case 2: set_weather_icon(icon_code, objects.image_3d_weather_icon); break;
-                case 3: set_weather_icon(icon_code, objects.image_4d_weather_icon); break;
-                case 4: set_weather_icon(icon_code, objects.image_5d_weather_icon); break;
-                case 5: set_weather_icon(icon_code, objects.image_6d_weather_icon); break;
-                case 6: set_weather_icon(icon_code, objects.image_7d_weather_icon); break;
-            }
-        }
-        
+        // Unlock the display
         lvgl_port_unlock();
     }
 }
+
 
 /**
  * @brief Timer callback to update time display
@@ -540,7 +421,7 @@ void app_main(void)
     
     // Start WiFi connection in the background
     // NTP sync will happen asynchronously via the IP event handler when we get an IP
-    esp_err_t wifi_result = wifi_init_sta(WIFI_SSID, WIFI_PASSWORD);
+    esp_err_t wifi_result = wifi_init_sta(wifi_ssid, wifi_password);
     if (wifi_result != ESP_OK) {
         ESP_LOGW(CLOCK_TAG, "WiFi initialization failed: %s. Using RTC time.", esp_err_to_name(wifi_result));
     } else {

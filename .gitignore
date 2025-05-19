@@ -1,0 +1,49 @@
+# Build directories
+build/
+sdkconfig
+sdkconfig.old
+
+# Sensitive data
+main/secrets.h
+
+# Compiled files
+*.bin
+*.elf
+*.map
+*.log
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Keep the template but not the actual secrets
+!main/secrets.h.template
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Environment and local configuration
+.env
+*.local
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ESP-IDF specific
+managed_components/
+dependencies.lock
