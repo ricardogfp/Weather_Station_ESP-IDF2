@@ -1,5 +1,9 @@
 #include "wifi_manager.h"
 #include <string.h>
+#include <time.h>
+#include <sys/param.h>
+#include <inttypes.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -7,10 +11,39 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif.h"
+#include "esp_sntp.h"
 #include "nvs_flash.h"
 
-// Include SNTP headers
-#include "lwip/apps/sntp.h"
+// SNTP configuration
+#define SNTP_SERVER_COUNT 3
+#define SNTP_SYNC_INTERVAL_MS (3600 * 1000)  // 1 hour in ms
+
+// Forward declaration of the time sync callback
+static void time_sync_notification_cb(struct timeval *tv);
+
+// Time sync notification callback
+static void time_sync_notification_cb(struct timeval *tv)
+{
+    if (!tv) return;
+    
+    time_t now = tv->tv_sec;
+    struct tm timeinfo;
+    char strftime_buf[64];
+    
+    localtime_r(&now, &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    
+    // Get current timezone information
+    const char* tz = getenv("TZ");
+    const char* tz_info = tz ? tz : "UTC";
+    
+    ESP_LOGI("SNTP", "Time synchronized: %s.%06ld %s (TZ: %s)", 
+             strftime_buf, 
+             (long)tv->tv_usec,
+             timeinfo.tm_isdst ? "CEST" : "CET",
+             tz_info);
+}
 
 #define EXAMPLE_ESP_MAXIMUM_RETRY 5
 
@@ -188,73 +221,84 @@ esp_err_t wifi_init_sta(const char *ssid, const char *password)
 
 esp_err_t sntp_init_sync(void)
 {
-    ESP_LOGI(TAG, "Initializing SNTP");
+    ESP_LOGI("SNTP", "Initializing SNTP service");
     
-    // Configure timezone to local time
-    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+    // Stop any existing SNTP service
+    if (esp_sntp_enabled()) {
+        esp_sntp_stop();
+    }
+    
+    // Set Madrid timezone (CET/CEST) first
+    setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
     tzset();
+    ESP_LOGI("SNTP", "Initializing SNTP with Madrid timezone");
+
+    // Set SNTP operating mode
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    // Set NTP servers
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_setservername(1, "time.nist.gov");
+    esp_sntp_setservername(2, "time.google.com");
+    // Set sync interval (ms)
+    esp_sntp_set_sync_interval(SNTP_SYNC_INTERVAL_MS);
+    // Set sync notification callback
+    esp_sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+    // Start SNTP service
+    esp_sntp_init();
+    ESP_LOGI("SNTP", "SNTP service started");
     
-    // Initialize SNTP with multiple server options
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_setservername(0, "pool.ntp.org");
-    sntp_setservername(1, "time.google.com");
-    sntp_setservername(2, "time.cloudflare.com");
+    // Log initial time status
+    time_t now = 0;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    char time_str[64];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S %Z", &timeinfo);
+    ESP_LOGI("SNTP", "Current time: %s (timestamp: %" PRId64 ")", time_str, (int64_t)now);
     
-    // SNTP sync interval is set by default
-    
-    // Actually start the SNTP service
-    sntp_init();
-    ESP_LOGI(TAG, "SNTP initialized, waiting for time sync");
+    ESP_LOGI("SNTP", "SNTP service started, waiting for time sync");
     
     // Wait for time to be set with proper timeout
-    time_t now = 0;
-    struct tm timeinfo = { 0 };
     int retry = 0;
-    const int retry_count = 15; // Increased retry count for better chance of success
+    const int retry_count = 15;  // 15 seconds total timeout
+    const int retry_delay_ms = 1000;  // 1 second between retries
     bool time_synced = false;
     
-    // Wait for time sync with timeout
-    while (retry < retry_count && !time_synced) {
-        ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry + 1, retry_count);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        
-        time(&now);
-        localtime_r(&now, &timeinfo);
-        
-        // Print current time status
-        char time_str[64];
-        strftime(time_str, sizeof(time_str), "%c", &timeinfo);
-        ESP_LOGI(TAG, "Current time: %s", time_str);
-        
-        // Check if time has been set properly
-        if (timeinfo.tm_year >= (2020 - 1900)) {
-            ESP_LOGI(TAG, "Time is synchronized!");
+    ESP_LOGI("SNTP", "Waiting for time synchronization...");
+    
+    while (retry < retry_count) {
+        if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
             time_synced = true;
             break;
         }
+        
+        // Log current time status
+        time(&now);
+        localtime_r(&now, &timeinfo);
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S %Z", &timeinfo);
+        ESP_LOGI("SNTP", "Waiting for sync... (%d/%d) Current: %s", 
+                 retry + 1, retry_count, time_str);
+        
+        vTaskDelay(pdMS_TO_TICKS(retry_delay_ms));
         retry++;
     }
     
     if (!time_synced) {
-        ESP_LOGW(TAG, "Failed to get time from NTP server");
-        sntp_stop(); // Stop SNTP client on failure
-        return ESP_FAIL;
+        ESP_LOGE("SNTP", "Failed to synchronize time after %d seconds", retry_count);
+        esp_sntp_stop();
+        return ESP_ERR_TIMEOUT;
     }
     
+    // Final time check
     time(&now);
     localtime_r(&now, &timeinfo);
-    char time_str[64];
-    strftime(time_str, sizeof(time_str), "%c", &timeinfo);
-    ESP_LOGI(TAG, "Synchronized time: %s", time_str);
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S %Z", &timeinfo);
     
     if (timeinfo.tm_year < (2020 - 1900)) {
-        ESP_LOGW(TAG, "Time not synchronized yet");
-        return ESP_FAIL;
+        ESP_LOGW("SNTP", "Time appears to be invalid (year: %d)", timeinfo.tm_year + 1900);
+        return ESP_ERR_INVALID_STATE;
     }
     
-    char strftime_buf[64];
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    ESP_LOGI(TAG, "Current time: %s", strftime_buf);
-    
+    ESP_LOGI("SNTP", "Time successfully synchronized: %s", time_str);
     return ESP_OK;
 }
