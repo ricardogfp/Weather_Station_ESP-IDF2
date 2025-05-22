@@ -4,15 +4,7 @@
 #include "waveshare_rgb_lcd_port.h"
 #include <sys/time.h>
 
-// Suppress unused variable warnings
-#define SUPPRESS_UNUSED_WARNING(x) (void)(x)
-
 static const char *DS3231_TAG = "ds3231";
-
-// Suppress warning about unused TAG from waveshare_rgb_lcd_port.h
-static void suppress_warnings(void) {
-    SUPPRESS_UNUSED_WARNING(TAG);
-}
 
 // Convert binary coded decimal to binary
 uint8_t bcd2bin(uint8_t val)

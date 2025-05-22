@@ -15,6 +15,10 @@ esp_err_t home_assistant_init(void) {
 
 // Send a command to a Home Assistant entity
 esp_err_t home_assistant_update_entity(const char* entity, const char* payload) {
+    ESP_LOGI(TAG, "=== home_assistant_update_entity called ===");
+    ESP_LOGI(TAG, "Entity: %s", entity ? entity : "NULL");
+    ESP_LOGI(TAG, "Payload: %s", payload ? payload : "NULL");
+    
     if (!entity || !payload) {
         ESP_LOGE(TAG, "Invalid entity or payload (null)");
         return ESP_ERR_INVALID_ARG;
@@ -29,9 +33,10 @@ esp_err_t home_assistant_update_entity(const char* entity, const char* payload) 
     wifi_ap_record_t ap_info;
     esp_err_t ret = esp_wifi_sta_get_ap_info(&ap_info);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi not connected");
+        ESP_LOGE(TAG, "WiFi not connected: %s (0x%x)", esp_err_to_name(ret), ret);
         return ESP_ERR_WIFI_NOT_CONNECT;
     }
+    ESP_LOGI(TAG, "WiFi connected to SSID: %s, RSSI: %d", ap_info.ssid, ap_info.rssi);
 
     // Determine service based on payload
     char service[32];
@@ -68,12 +73,13 @@ esp_err_t home_assistant_update_entity(const char* entity, const char* payload) 
         .timeout_ms = 10000,
         .skip_cert_common_name_check = true,
     };
-
+    ESP_LOGI(TAG, "Initializing HTTP client with URL: %s", url);
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) {
         ESP_LOGE(TAG, "Failed to initialize HTTP client");
         return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "HTTP client initialized successfully");
 
     // Set headers
     esp_http_client_set_header(client, "Content-Type", "application/json");
@@ -83,11 +89,20 @@ esp_err_t home_assistant_update_entity(const char* entity, const char* payload) 
     esp_http_client_set_post_field(client, json_payload, strlen(json_payload));
 
     // Perform the request
+    ESP_LOGI(TAG, "Sending HTTP POST request to %s", url);
+    ESP_LOGI(TAG, "Request headers:");
+    ESP_LOGI(TAG, "  Content-Type: application/json");
+    ESP_LOGI(TAG, "  Authorization: %s", auth_header);
+    ESP_LOGI(TAG, "Request body: %s", json_payload);
+    
     esp_err_t err;
     err = esp_http_client_perform(client);
+    
+    ESP_LOGI(TAG, "HTTP request completed with status: %s (0x%x)", esp_err_to_name(err), err);
     if (err == ESP_OK) {
         int status_code = esp_http_client_get_status_code(client);
-        ESP_LOGI(TAG, "HTTP POST Status = %d", status_code);
+        ESP_LOGI(TAG, "HTTP Response Status = %d", status_code);
+        ESP_LOGI(TAG, "Content-Length = %lld", (long long)esp_http_client_get_content_length(client));
         
         // Read response
         char response_buffer[256] = {0};
@@ -111,6 +126,7 @@ esp_err_t home_assistant_update_entity(const char* entity, const char* payload) 
     } else {
         ESP_LOGE(TAG, "HTTP POST request failed: %s", esp_err_to_name(err));
         esp_http_client_cleanup(client);
-        return err;
+    ESP_LOGI(TAG, "=== home_assistant_update_entity completed with status: %s (0x%x) ===\n", esp_err_to_name(err), err);
+    return err;
     }
 }

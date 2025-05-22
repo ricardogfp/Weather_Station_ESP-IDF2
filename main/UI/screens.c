@@ -1126,12 +1126,9 @@ void create_screen_pc() {
         }
         {
             lv_obj_t *obj = lv_img_create(parent_obj);
-            objects.obj13 = obj;
             lv_obj_set_pos(obj, 88, 124);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_img_set_src(obj, &img_plane);
-            lv_obj_set_style_img_recolor(obj, lv_color_hex(0xff7f7f7f), LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_img_recolor_opa(obj, 1000000, LV_PART_MAIN | LV_STATE_DEFAULT);
         }
         {
             // View 1
@@ -1145,7 +1142,7 @@ void create_screen_pc() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj14 = obj;
+                    objects.obj13 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1166,7 +1163,7 @@ void create_screen_pc() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj15 = obj;
+                    objects.obj14 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1187,7 +1184,7 @@ void create_screen_pc() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj16 = obj;
+                    objects.obj15 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1208,7 +1205,7 @@ void create_screen_pc() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj17 = obj;
+                    objects.obj16 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1229,7 +1226,7 @@ void create_screen_pc() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj18 = obj;
+                    objects.obj17 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1250,7 +1247,7 @@ void create_screen_pc() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj19 = obj;
+                    objects.obj18 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1271,7 +1268,7 @@ void create_screen_pc() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj20 = obj;
+                    objects.obj19 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1292,7 +1289,7 @@ void create_screen_pc() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj21 = obj;
+                    objects.obj20 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1313,7 +1310,7 @@ void create_screen_pc() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj22 = obj;
+                    objects.obj21 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1334,7 +1331,7 @@ void create_screen_pc() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj23 = obj;
+                    objects.obj22 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1365,7 +1362,7 @@ void tick_screen_pc() {
 
 
 static const char *screen_names[] = { "Main", "PC" };
-static const char *object_names[] = { "main", "pc", "obj0", "obj1", "obj2", "obj3", "obj4", "view_1", "view_1_1", "view_1_2", "view_1_3", "view_1_4", "view_1_5", "view_1_6", "view_1_7", "view_1_8", "view_1_9", "obj5", "label_city", "label_time", "label_date", "image_current_weather_icon", "label_weather_description", "obj6", "label_current_temperature", "label_current_temp_min", "obj7", "label_current_temp_max", "image_1h_weather_icon", "label_1h", "label_1h_temperature", "image_2h_weather_icon", "label_2h", "label_2h_temperature", "image_3h_weather_icon", "label_3h", "label_3h_temperature", "image_4h_weather_icon", "label_4h", "label_4h_temperature", "image_5h_weather_icon", "label_5h", "label_5h_temperature", "image_6h_weather_icon", "label_6h", "label_6h_temperature", "image_1d_weather_icon", "label_1d", "label_1d_temp_max", "image_2d_weather_icon", "label_2d_temp_max", "image_3d_weather_icon", "label_3d_temp_max", "image_4d_weather_icon", "label_4d_temp_max", "image_5d_weather_icon", "label_5d_temp_max", "image_6d_weather_icon", "label_6d_temp_max", "label_2d", "label_3d", "label_4d", "label_5d", "label_6d", "label_1d_temp_min", "label_2d_temp_min", "label_3d_temp_min", "label_4d_temp_min", "label_5d_temp_min", "label_6d_temp_min", "image_7h_weather_icon", "label_7h", "label_7h_temperature", "image_7d_weather_icon", "label_7d_temp_max", "label_7d", "label_7d_temp_min", "obj8", "label_info", "obj9", "obj10", "label_city_1", "label_time_1", "label_date_1", "image_current_weather_icon_1", "label_weather_description_1", "label_current_temperature_1", "label_current_temp_min_1", "obj11", "label_current_temp_max_1", "obj12", "label_info_1", "obj13", "obj14", "obj15", "obj16", "obj17", "obj18", "obj19", "obj20", "obj21", "obj22", "obj23" };
+static const char *object_names[] = { "main", "pc", "obj0", "obj1", "obj2", "obj3", "obj4", "view_1", "view_1_1", "view_1_2", "view_1_3", "view_1_4", "view_1_5", "view_1_6", "view_1_7", "view_1_8", "view_1_9", "obj5", "label_city", "label_time", "label_date", "image_current_weather_icon", "label_weather_description", "obj6", "label_current_temperature", "label_current_temp_min", "obj7", "label_current_temp_max", "image_1h_weather_icon", "label_1h", "label_1h_temperature", "image_2h_weather_icon", "label_2h", "label_2h_temperature", "image_3h_weather_icon", "label_3h", "label_3h_temperature", "image_4h_weather_icon", "label_4h", "label_4h_temperature", "image_5h_weather_icon", "label_5h", "label_5h_temperature", "image_6h_weather_icon", "label_6h", "label_6h_temperature", "image_1d_weather_icon", "label_1d", "label_1d_temp_max", "image_2d_weather_icon", "label_2d_temp_max", "image_3d_weather_icon", "label_3d_temp_max", "image_4d_weather_icon", "label_4d_temp_max", "image_5d_weather_icon", "label_5d_temp_max", "image_6d_weather_icon", "label_6d_temp_max", "label_2d", "label_3d", "label_4d", "label_5d", "label_6d", "label_1d_temp_min", "label_2d_temp_min", "label_3d_temp_min", "label_4d_temp_min", "label_5d_temp_min", "label_6d_temp_min", "image_7h_weather_icon", "label_7h", "label_7h_temperature", "image_7d_weather_icon", "label_7d_temp_max", "label_7d", "label_7d_temp_min", "obj8", "label_info", "obj9", "obj10", "label_city_1", "label_time_1", "label_date_1", "image_current_weather_icon_1", "label_weather_description_1", "label_current_temperature_1", "label_current_temp_min_1", "obj11", "label_current_temp_max_1", "obj12", "label_info_1", "obj13", "obj14", "obj15", "obj16", "obj17", "obj18", "obj19", "obj20", "obj21", "obj22" };
 
 
 typedef void (*tick_screen_func_t)();

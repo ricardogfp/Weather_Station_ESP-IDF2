@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS "weather_client.c" "waveshare_rgb_lcd_port.c" "main.c" "lvgl_port.c" "ds3231.c" "wifi_manager.c" 
-         "UI/ui.c" "UI/eez-flow.cpp" "UI/eez-flow-lz4.c" "UI/screens.c"
+        
+         "UI/ui.c" "UI/eez-flow.cpp" "UI/screens.c"
          "UI/images.c" "UI/styles.c" "ui_actions.c" "home_assistant.c"
          "UI/images/ui_image_icon_01d_72p.c" "UI/images/ui_image_icon_01n_72p.c"
          "UI/images/ui_image_icon_02d_72p.c" "UI/images/ui_image_icon_02n_72p.c"

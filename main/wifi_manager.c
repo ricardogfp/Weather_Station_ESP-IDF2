@@ -14,6 +14,7 @@
 #include "esp_netif.h"
 #include "esp_sntp.h"
 #include "nvs_flash.h"
+#include "secrets.h"
 
 // SNTP configuration
 #define SNTP_SERVER_COUNT 3
@@ -228,10 +229,11 @@ esp_err_t sntp_init_sync(void)
         esp_sntp_stop();
     }
     
-    // Set Madrid timezone (CET/CEST) first
-    setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
+    // Set timezone to Central European Time (CET/CEST)
+    const char* tz = "CET-1CEST,M3.5.0,M10.5.0/3";
+    setenv("TZ", tz, 1);
     tzset();
-    ESP_LOGI("SNTP", "Initializing SNTP with Madrid timezone");
+    ESP_LOGI("SNTP", "Initializing SNTP with timezone: %s", tz);
 
     // Set SNTP operating mode
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
