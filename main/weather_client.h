@@ -10,8 +10,10 @@
 #define MAX_API_KEY_LEN 40
 #define MAX_LAT_LON_LEN 10
 #define MAX_WEATHER_DESC_LEN 32
-#define MAX_WEATHER_ICON_LEN 8
-#define MAX_HOURLY_FORECAST 24  // Maximum number of hourly forecasts to store
+#define MAX_WEATHER_ICON_LEN 10
+#define MAX_HOURLY_FORECAST 7  // Maximum number of hourly forecasts to store
+#define MAX_DAILY_FORECAST 8    // Maximum number of daily forecasts to store
+#define MAX_HOURLY_FORECAST_DISPLAY 7 // Number of hourly forecasts to display on UI
 
 // Weather condition codes mapping to icon names
 typedef enum {
@@ -35,6 +37,14 @@ typedef struct {
     weather_condition_t condition;   // Weather condition
 } hourly_forecast_t;
 
+// Daily forecast data structure
+typedef struct {
+    time_t timestamp;                // Unix timestamp of the forecast day (usually noon or midnight)
+    float temp_min;                  // Minimum daily temperature in Celsius
+    float temp_max;                  // Maximum daily temperature in Celsius
+    char icon[MAX_WEATHER_ICON_LEN]; // Weather icon code for the day
+} daily_forecast_t;
+
 /**
  * @brief Weather data structure
  */
@@ -49,6 +59,12 @@ typedef struct {
     hourly_forecast_t hourly[MAX_HOURLY_FORECAST]; // Hourly forecasts
     uint8_t hourly_count;                         // Number of available hourly forecasts
     time_t last_forecast_update;                  // Timestamp of last forecast update
+
+    // Daily forecast
+    daily_forecast_t daily[MAX_DAILY_FORECAST]; // Daily forecasts for 8 days
+    uint8_t daily_count;                        // Number of available daily forecasts
+    float temp_min;                            // Today's minimum temperature (from daily[0])
+    float temp_max;                            // Today's maximum temperature (from daily[0])
 } weather_data_t;
 
 /**
@@ -88,7 +104,7 @@ bool weather_client_get_description(char *buffer, size_t size);
 
 /**
  * @brief Get the current weather icon code
- * @param[out] buffer Buffer to store the icon code (max 8 characters)
+ * @param[out] buffer Buffer to store the icon code (max 10 characters)
  * @param size Size of the buffer (should be at least MAX_WEATHER_ICON_LEN)
  * @return true if icon code was copied, false otherwise
  */
@@ -113,6 +129,20 @@ bool weather_client_get_hourly_forecast(uint8_t hour_offset, hourly_forecast_t *
  * @return Number of available hourly forecasts (0 if none)
  */
 uint8_t weather_client_get_hourly_forecast_count(void);
+
+/**
+ * @brief Get daily forecast data for a specific day offset (0 = today, 1 = tomorrow, etc.)
+ * @param day_offset Days from today (0 to MAX_DAILY_FORECAST - 1)
+ * @param forecast Pointer to structure to store the forecast data
+ * @return true if forecast data is available, false otherwise
+ */
+bool weather_client_get_daily_forecast(uint8_t day_offset, daily_forecast_t *forecast);
+
+/**
+ * @brief Get the number of available daily forecasts
+ * @return Number of available daily forecasts (0 if none)
+ */
+uint8_t weather_client_get_daily_forecast_count(void);
 
 /**
  * @brief Get the time of the next forecast update

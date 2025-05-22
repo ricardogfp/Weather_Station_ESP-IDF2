@@ -1,6 +1,7 @@
 #include "UI/actions.h"
 #include "UI/screens.h"
 #include "UI/ui.h"
+#include "UI/vars.h"
 #include "UI/eez-flow.h"
 #include "esp_log.h"
 #include "home_assistant.h"
@@ -33,7 +34,7 @@ void action_rest_api(lv_event_t * e) {
     }
     
     if (target) {
-        const char * obj_name = lv_obj_get_user_data(target);
+        const char * obj_name = (const char *)lv_obj_get_user_data(target); // Added explicit cast for C++
         ESP_LOGI(TAG, "Target object: %p, Name: %s", target, obj_name ? obj_name : "unnamed");
     } else {
         ESP_LOGI(TAG, "No target object");
@@ -58,26 +59,35 @@ void action_rest_api(lv_event_t * e) {
     const char* entity = NULL;
     const char* payload = NULL;
     
+    ESP_LOGI(TAG, "Attempting to retrieve global variables G_ENTITY and G_PAYLOAD.");
+
     // Check if we have appropriate global variables defined in the UI
     // These would be set by EEZ Studio UI
-    #ifdef FLOW_GLOBAL_VARIABLE_G_ENTITY
-    auto entity_var = flow::getGlobalVariable(FLOW_GLOBAL_VARIABLE_G_ENTITY);
+    ESP_LOGI(TAG, "Looking for G_ENTITY (%d)", FLOW_GLOBAL_VARIABLE_G_ENTITY);
+    auto entity_var = eez::flow::getGlobalVariable(FLOW_GLOBAL_VARIABLE_G_ENTITY);
+    ESP_LOGI(TAG, "G_ENTITY raw Value type: %d (IsString: %s)", entity_var.getType(), entity_var.isString() ? "true" : "false");
     if (entity_var.isString()) {
         entity = entity_var.getString();
-        ESP_LOGI(TAG, "Entity: %s", entity);
+        ESP_LOGI(TAG, "G_ENTITY retrieved as string: '%s'", entity ? entity : "NULL_STR");
+    } else {
+        // Log even if not a string, to see what getString might return or if it's null
+        const char* temp_entity_str = entity_var.getString();
+        ESP_LOGW(TAG, "G_ENTITY is not a string. getString() returns: '%s'", temp_entity_str ? temp_entity_str : "NULL_STR");
     }
-    #endif
     
-    #ifdef FLOW_GLOBAL_VARIABLE_G_PAYLOAD
-    auto payload_var = flow::getGlobalVariable(FLOW_GLOBAL_VARIABLE_G_PAYLOAD);
+    ESP_LOGI(TAG, "Looking for G_PAYLOAD (%d)", FLOW_GLOBAL_VARIABLE_G_PAYLOAD);
+    auto payload_var = eez::flow::getGlobalVariable(FLOW_GLOBAL_VARIABLE_G_PAYLOAD);
+    ESP_LOGI(TAG, "G_PAYLOAD raw Value type: %d (IsString: %s)", payload_var.getType(), payload_var.isString() ? "true" : "false");
     if (payload_var.isString()) {
         payload = payload_var.getString();
-        ESP_LOGI(TAG, "Payload: %s", payload);
+        ESP_LOGI(TAG, "G_PAYLOAD retrieved as string: '%s'", payload ? payload : "NULL_STR");
+    } else {
+        const char* temp_payload_str = payload_var.getString();
+        ESP_LOGW(TAG, "G_PAYLOAD is not a string. getString() returns: '%s'", temp_payload_str ? temp_payload_str : "NULL_STR");
     }
-    #endif
     
     // If we have both entity and payload, make the Home Assistant API call
-    if (entity && payload) {
+    if (entity && payload && strlen(entity) > 0 && strlen(payload) > 0) { 
         ESP_LOGI(TAG, "--- Making Home Assistant REST API Call ---");
         ESP_LOGI(TAG, "Entity: %s", entity);
         ESP_LOGI(TAG, "Payload: %s", payload);
@@ -91,30 +101,11 @@ void action_rest_api(lv_event_t * e) {
             ESP_LOGE(TAG, "REST API call failed with error: %s", esp_err_to_name(result));
         }
     } else {
-        // If we don't have entity and payload, just handle screen navigation
-        ESP_LOGI(TAG, "No entity/payload variables found, performing screen navigation");
-        
-        // Navigation between screens based on EnumsScreen values
-        lv_obj_t *current_screen = lv_scr_act();
-        
-        // Check if we're on the main screen
-        if (current_screen == objects.main) {
-            ESP_LOGI(TAG, "Currently on main screen, navigating to PC screen");
-            lv_scr_load_anim(objects.pc, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
-        } 
-        // Check if we're on the PC screen
-        else if (current_screen == objects.pc) {
-            ESP_LOGI(TAG, "Currently on PC screen, returning to main screen");
-            lv_scr_load_anim(objects.main, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
-        } 
-        // Fallback to main screen if we're on an unknown screen
-        else {
-            ESP_LOGI(TAG, "On unknown screen, returning to main screen");
-            lv_scr_load(objects.main);
-        }
-        
-        ESP_LOGI(TAG, "Screen navigation performed");
+        // If we don't have entity and payload, just log it. Screen navigation removed.
+        ESP_LOGW(TAG, "Entity ('%s') or Payload ('%s') are missing or empty. No Home Assistant call will be made. No screen navigation.", 
+                 entity ? entity : "NULL_OR_UNDEFINED", 
+                 payload ? payload : "NULL_OR_UNDEFINED");
     }
     
-    ESP_LOGI(TAG, "--- Finished Home Assistant REST API Call ---");
+    ESP_LOGI(TAG, "--- Finished processing action_rest_api ---"); 
 }

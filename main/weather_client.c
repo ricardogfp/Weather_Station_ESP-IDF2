@@ -13,7 +13,7 @@
 static const char *TAG = "WEATHER_CLIENT";
 
 // API configuration
-#define WEATHER_API_URL "https://api.openweathermap.org/data/3.0/onecall?exclude=minutely,daily,alerts&units=metric"
+#define WEATHER_API_URL "https://api.openweathermap.org/data/3.0/onecall?exclude=minutely,alerts&units=metric"
 
 // Global variables
 static char api_key[MAX_API_KEY_LEN] = {0};
@@ -25,7 +25,9 @@ static weather_data_t current_weather = {
     .icon = "",
     .condition = WEATHER_UNKNOWN,
     .hourly_count = 0,
-    .last_forecast_update = 0
+    .last_forecast_update = 0,
+    .daily_count = 0 // Initialize daily_count
+    // .daily array will be zero-initialized by static storage duration
 };
 static char *response_buffer = NULL;
 static size_t response_len = 0;
@@ -154,135 +156,157 @@ static esp_err_t parse_weather_data(const char *json_str) {
 
     cJSON *root = cJSON_Parse(json_str);
     if (!root) {
-        ESP_LOGE(TAG, "Failed to parse JSON");
-        return ESP_ERR_INVALID_RESPONSE;
+        ESP_LOGE(TAG, "Failed to parse JSON: %s", cJSON_GetErrorPtr());
+        return ESP_FAIL;
     }
 
-    // Get current time for forecast reference
-    time_t now = time(NULL);
+    // Get current time for forecast window calculation
+    time_t now;
+    time(&now);
     struct tm timeinfo;
     localtime_r(&now, &timeinfo);
-    
-    // We want to start from the current time
-    time_t forecast_start = now;
-    
-    // We'll take the next 7 hours of forecast data
-    time_t forecast_end = now + (7 * 3600);  // Next 7 hours from now
-    
-    char time_str[64];
-    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
-    char start_str[64];
-    strftime(start_str, sizeof(start_str), "%Y-%m-%d %H:%M:%S", localtime(&forecast_start));
-    char end_str[64];
-    strftime(end_str, sizeof(end_str), "%Y-%m-%d %H:%M:%S", localtime(&forecast_end));
-    
-    ESP_LOGI(TAG, "Current time: %s", time_str);
-    ESP_LOGI(TAG, "Forecast window: %s to %s", start_str, end_str);
+    char current_time_str[20];
+    strftime(current_time_str, sizeof(current_time_str), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    ESP_LOGI(TAG, "Current time: %s", current_time_str);
 
-    // Initialize weather data with default values
-    current_weather.temperature = NAN;
-    current_weather.description[0] = '\0';
-    current_weather.icon[0] = '\0';
-    current_weather.condition = WEATHER_UNKNOWN;
-    current_weather.hourly_count = 0;
+    // Calculate forecast window (e.g., next 7 hours for hourly)
+    time_t forecast_end_time = now + (MAX_HOURLY_FORECAST_DISPLAY * 3600); // Example: 7 hours window
+    struct tm forecast_end_timeinfo;
+    localtime_r(&forecast_end_time, &forecast_end_timeinfo);
+    char forecast_end_time_str[20];
+    strftime(forecast_end_time_str, sizeof(forecast_end_time_str), "%Y-%m-%d %H:%M:%S", &forecast_end_timeinfo);
+    ESP_LOGI(TAG, "Forecast window: %s to %s", current_time_str, forecast_end_time_str);
 
     // Parse current weather
     cJSON *current = cJSON_GetObjectItem(root, "current");
     if (current) {
-        // Get temperature
-        cJSON *temp = cJSON_GetObjectItem(current, "temp");
-        if (cJSON_IsNumber(temp)) {
-            current_weather.temperature = temp->valuedouble;
-            ESP_LOGI(TAG, "Current temperature: %.1f°C", current_weather.temperature);
-        }
-        
-        // Get weather array (first item contains main weather info)
+        current_weather.temperature = cJSON_GetObjectItem(current, "temp") ? 
+                                      (float)cJSON_GetObjectItem(current, "temp")->valuedouble : NAN;
+        ESP_LOGI(TAG, "Current temperature: %.1f°C", current_weather.temperature);
+
         cJSON *weather_array = cJSON_GetObjectItem(current, "weather");
         if (cJSON_IsArray(weather_array) && cJSON_GetArraySize(weather_array) > 0) {
-            cJSON *weather = cJSON_GetArrayItem(weather_array, 0);
-            
-            // Get description
-            cJSON *desc = cJSON_GetObjectItem(weather, "description");
-            if (cJSON_IsString(desc) && (desc->valuestring != NULL)) {
-                strlcpy(current_weather.description, desc->valuestring, MAX_WEATHER_DESC_LEN);
-                ESP_LOGI(TAG, "Description: %s", current_weather.description);
-            }
-            
-            // Get icon code
-            cJSON *icon = cJSON_GetObjectItem(weather, "icon");
-            if (cJSON_IsString(icon) && (icon->valuestring != NULL)) {
-                strlcpy(current_weather.icon, icon->valuestring, MAX_WEATHER_ICON_LEN);
-                current_weather.condition = map_weather_condition(icon->valuestring);
-                ESP_LOGI(TAG, "Icon: %s, Condition: %d", current_weather.icon, current_weather.condition);
-            }
+            cJSON *weather_item = cJSON_GetArrayItem(weather_array, 0);
+            const char *desc = cJSON_GetObjectItem(weather_item, "description") ? 
+                               cJSON_GetObjectItem(weather_item, "description")->valuestring : "N/A";
+            strncpy(current_weather.description, desc, MAX_WEATHER_DESC_LEN - 1);
+            current_weather.description[MAX_WEATHER_DESC_LEN - 1] = '\0';
+            ESP_LOGI(TAG, "Description: %s", current_weather.description);
+
+            const char *icon_code = cJSON_GetObjectItem(weather_item, "icon") ? 
+                                    cJSON_GetObjectItem(weather_item, "icon")->valuestring : "01d";
+            strncpy(current_weather.icon, icon_code, MAX_WEATHER_ICON_LEN - 1);
+            current_weather.icon[MAX_WEATHER_ICON_LEN - 1] = '\0';
+            current_weather.condition = map_weather_condition(current_weather.icon);
+            ESP_LOGI(TAG, "Icon: %s, Condition: %d", current_weather.icon, current_weather.condition);
         }
     }
-    
+
     // Parse hourly forecast
     cJSON *hourly_array = cJSON_GetObjectItem(root, "hourly");
     if (cJSON_IsArray(hourly_array)) {
-        int array_size = cJSON_GetArraySize(hourly_array);
-        int forecast_count = 0;
-        ESP_LOGI(TAG, "Found %d hourly forecasts in API response", array_size);
-        ESP_LOGI(TAG, "Current timestamp: %ld", (long)now);
-        
-        // Get forecasts for the next 7 hours
-        for (int i = 0; i < array_size && forecast_count < 7; i++) {
-            cJSON *hour = cJSON_GetArrayItem(hourly_array, i);
-            if (!hour) continue;
-            
-            // Get timestamp for this hour
-            cJSON *dt = cJSON_GetObjectItem(hour, "dt");
-            if (!cJSON_IsNumber(dt)) continue;
-            
-            time_t forecast_time = (time_t)dt->valueint;
-            
-            // Skip forecasts before our forecast start time
-            if (forecast_time < forecast_start) continue;
-            
-            // Stop if we've gone past our forecast window
-            if (forecast_time >= forecast_end) break;
-            
-            // Store the forecast
-            current_weather.hourly[forecast_count].timestamp = forecast_time;
-            
-            // Get temperature
-            cJSON *temp = cJSON_GetObjectItem(hour, "temp");
-            if (cJSON_IsNumber(temp)) {
-                current_weather.hourly[forecast_count].temperature = temp->valuedouble;
-                ESP_LOGI(TAG, "Forecast %d: time=%ld, temp=%.1f", 
-                        forecast_count, (long)forecast_time, temp->valuedouble);
-            } else {
-                current_weather.hourly[forecast_count].temperature = NAN;
-                ESP_LOGI(TAG, "Forecast %d: time=%ld, temp=N/A", 
-                        forecast_count, (long)forecast_time);
-            }
-            
-            // Get weather info
-            cJSON *weather = cJSON_GetObjectItem(hour, "weather");
-            if (cJSON_IsArray(weather) && cJSON_GetArraySize(weather) > 0) {
-                cJSON *weather_item = cJSON_GetArrayItem(weather, 0);
-                if (weather_item) {
-                    cJSON *icon = cJSON_GetObjectItem(weather_item, "icon");
-                    if (cJSON_IsString(icon) && (icon->valuestring != NULL)) {
-                        strlcpy(current_weather.hourly[forecast_count].icon, 
-                              icon->valuestring, MAX_WEATHER_ICON_LEN);
-                        current_weather.hourly[forecast_count].condition = 
-                            map_weather_condition(icon->valuestring);
-                    }
+        int num_hourly = cJSON_GetArraySize(hourly_array);
+        ESP_LOGI(TAG, "Found %d hourly forecasts in API response", num_hourly);
+        current_weather.hourly_count = 0;
+        time_t current_timestamp;
+        time(&current_timestamp); // Get current time to filter out past forecasts
+        ESP_LOGI(TAG, "Current timestamp: %ld", (long)current_timestamp);
+
+        for (int i = 0; i < num_hourly && current_weather.hourly_count < MAX_HOURLY_FORECAST; ++i) {
+            cJSON *item = cJSON_GetArrayItem(hourly_array, i);
+            time_t forecast_time = cJSON_GetObjectItem(item, "dt") ? 
+                                   (time_t)cJSON_GetObjectItem(item, "dt")->valueint : 0;
+
+            // Only consider forecasts that are in the future and within the display window (e.g., next 7 hours)
+            // The API gives 48 hours, we might only want to store/display a subset.
+            if (forecast_time >= current_timestamp && forecast_time <= forecast_end_time) {
+                current_weather.hourly[current_weather.hourly_count].timestamp = forecast_time;
+                current_weather.hourly[current_weather.hourly_count].temperature = 
+                    cJSON_GetObjectItem(item, "temp") ? (float)cJSON_GetObjectItem(item, "temp")->valuedouble : NAN;
+                
+                ESP_LOGI(TAG, "Forecast %d: time=%ld, temp=%.1f", current_weather.hourly_count,
+                         (long)current_weather.hourly[current_weather.hourly_count].timestamp,
+                         current_weather.hourly[current_weather.hourly_count].temperature);
+
+                cJSON *weather_array_hourly = cJSON_GetObjectItem(item, "weather");
+                if (cJSON_IsArray(weather_array_hourly) && cJSON_GetArraySize(weather_array_hourly) > 0) {
+                    cJSON *weather_item_hourly = cJSON_GetArrayItem(weather_array_hourly, 0);
+                    const char *icon_code_hourly = cJSON_GetObjectItem(weather_item_hourly, "icon") ? 
+                                                   cJSON_GetObjectItem(weather_item_hourly, "icon")->valuestring : "01d";
+                    strncpy(current_weather.hourly[current_weather.hourly_count].icon, 
+                            icon_code_hourly, MAX_WEATHER_ICON_LEN - 1);
+                    current_weather.hourly[current_weather.hourly_count].icon[MAX_WEATHER_ICON_LEN - 1] = '\0';
+                    current_weather.hourly[current_weather.hourly_count].condition = 
+                        map_weather_condition(current_weather.hourly[current_weather.hourly_count].icon);
                 }
+                current_weather.hourly_count++;
             }
-            
-            forecast_count++;
-            
-            // No need to check for next day since we're only looking at a 6-hour window
         }
-        
-        current_weather.hourly_count = forecast_count;
-        current_weather.last_forecast_update = now;
-        ESP_LOGI(TAG, "Loaded %d hourly forecasts", forecast_count);
+        ESP_LOGI(TAG, "Loaded %d hourly forecasts", current_weather.hourly_count);
     }
 
+    // Parse daily forecast
+    cJSON *daily_array = cJSON_GetObjectItem(root, "daily");
+    if (cJSON_IsArray(daily_array)) {
+        current_weather.daily_count = 0; // Reset count before parsing
+        int num_daily = cJSON_GetArraySize(daily_array);
+        ESP_LOGI(TAG, "Daily forecast items in JSON: %d", num_daily);
+        for (int i = 0; i < num_daily && current_weather.daily_count < MAX_DAILY_FORECAST; ++i) {
+            cJSON *item = cJSON_GetArrayItem(daily_array, i);
+            if (!item) continue;
+
+            current_weather.daily[current_weather.daily_count].timestamp =
+                cJSON_GetObjectItem(item, "dt") ? (time_t)cJSON_GetObjectItem(item, "dt")->valueint : 0;
+
+            cJSON *temp_obj = cJSON_GetObjectItem(item, "temp");
+            if (temp_obj) {
+                current_weather.daily[current_weather.daily_count].temp_min =
+                    cJSON_GetObjectItem(temp_obj, "min") ? cJSON_GetObjectItem(temp_obj, "min")->valuedouble : NAN;
+                current_weather.daily[current_weather.daily_count].temp_max =
+                    cJSON_GetObjectItem(temp_obj, "max") ? cJSON_GetObjectItem(temp_obj, "max")->valuedouble : NAN;
+            } else {
+                current_weather.daily[current_weather.daily_count].temp_min = NAN;
+                current_weather.daily[current_weather.daily_count].temp_max = NAN;
+            }
+
+            cJSON *weather_array_daily = cJSON_GetObjectItem(item, "weather");
+            if (cJSON_IsArray(weather_array_daily) && cJSON_GetArraySize(weather_array_daily) > 0) {
+                cJSON *weather_item_daily = cJSON_GetArrayItem(weather_array_daily, 0);
+                const char *icon_str = cJSON_GetObjectItem(weather_item_daily, "icon") ? cJSON_GetObjectItem(weather_item_daily, "icon")->valuestring : "";
+                strncpy(current_weather.daily[current_weather.daily_count].icon, icon_str, sizeof(current_weather.daily[current_weather.daily_count].icon) - 1);
+                current_weather.daily[current_weather.daily_count].icon[sizeof(current_weather.daily[current_weather.daily_count].icon) - 1] = '\0';
+            } else {
+                current_weather.daily[current_weather.daily_count].icon[0] = '\0';
+            }
+            ESP_LOGD(TAG, "Daily[%d]: ts=%ld, min=%.1f, max=%.1f, icon=%s", 
+                current_weather.daily_count,
+                (long)current_weather.daily[current_weather.daily_count].timestamp,
+                current_weather.daily[current_weather.daily_count].temp_min,
+                current_weather.daily[current_weather.daily_count].temp_max,
+                current_weather.daily[current_weather.daily_count].icon);
+            current_weather.daily_count++;
+        }
+    } else {
+        ESP_LOGW(TAG, "Daily forecast data not found or not an array.");
+        current_weather.daily_count = 0;
+    }
+
+    // After parsing daily forecasts, if today's forecast (daily[0]) is available,
+    // use its min/max for the current_weather's main temp_min and temp_max.
+    if (current_weather.daily_count > 0) {
+        current_weather.temp_min = current_weather.daily[0].temp_min;
+        current_weather.temp_max = current_weather.daily[0].temp_max;
+        ESP_LOGI(TAG, "Updated current_weather.temp_min/max from daily[0]: %.1f°C / %.1f°C", 
+                 current_weather.temp_min, current_weather.temp_max);
+    } else {
+        // If no daily forecast, ensure current_weather.temp_min/max are NAN or some default
+        // (They might have been set by the 'current' weather section if that's preferred as a fallback)
+        // For now, we assume if daily[0] is not there, we don't override what 'current' might have set.
+        // If 'current' doesn't set them, they remain as initialized (likely NAN or 0).
+        ESP_LOGW(TAG, "No daily forecast data to update current_weather.temp_min/max.");
+    }
+
+    current_weather.last_forecast_update = now;
     cJSON_Delete(root);
     return ESP_OK;
 }
@@ -320,17 +344,27 @@ weather_condition_t weather_client_get_condition(void) {
 }
 
 bool weather_client_get_hourly_forecast(uint8_t hour_offset, hourly_forecast_t *forecast) {
-    if (!forecast || hour_offset >= current_weather.hourly_count) {
-        return false;
+    if (hour_offset < current_weather.hourly_count && forecast) {
+        *forecast = current_weather.hourly[hour_offset];
+        return true;
     }
-    
-    // Get the forecast for the requested hour offset (0-based index)
-    *forecast = current_weather.hourly[hour_offset];
-    return true;
+    return false;
 }
 
 uint8_t weather_client_get_hourly_forecast_count(void) {
     return current_weather.hourly_count;
+}
+
+bool weather_client_get_daily_forecast(uint8_t day_offset, daily_forecast_t *forecast) {
+    if (day_offset < current_weather.daily_count && forecast) {
+        *forecast = current_weather.daily[day_offset];
+        return true;
+    }
+    return false;
+}
+
+uint8_t weather_client_get_daily_forecast_count(void) {
+    return current_weather.daily_count;
 }
 
 time_t weather_client_get_next_forecast_update(void) {
@@ -338,8 +372,20 @@ time_t weather_client_get_next_forecast_update(void) {
     return current_weather.last_forecast_update + 1800; // 30 minutes in seconds
 }
 
+void init_weather_client(void) {
+    memset(&current_weather, 0, sizeof(current_weather));
+    current_weather.temperature = NAN;
+    current_weather.temp_min = NAN; 
+    current_weather.temp_max = NAN; 
+    current_weather.last_forecast_update = 0;
+    current_weather.hourly_count = 0;
+    current_weather.daily_count = 0;
+    // No need to initialize arrays current_weather.hourly and current_weather.daily here as memset did it.
+}
+
 // Initialize the weather client
 void weather_client_init(const char *api_key_param, const char *latitude_param, const char *longitude_param) {
+    init_weather_client();
     if (api_key_param) {
         strncpy(api_key, api_key_param, MAX_API_KEY_LEN - 1);
         api_key[MAX_API_KEY_LEN - 1] = '\0';
@@ -368,7 +414,7 @@ esp_err_t weather_client_update(void) {
     // Build the complete URL with query parameters
     char url[256];
     snprintf(url, sizeof(url), 
-             "https://api.openweathermap.org/data/3.0/onecall?lat=%s&lon=%s&exclude=minutely,daily,alerts&units=metric&appid=%s",
+             "https://api.openweathermap.org/data/3.0/onecall?lat=%s&lon=%s&exclude=minutely,alerts&units=metric&appid=%s",
              latitude, longitude, api_key);
     
     ESP_LOGI(TAG, "Fetching weather data from: %s", url);

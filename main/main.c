@@ -168,6 +168,7 @@
  static void weather_update_timer_cb(lv_timer_t *timer);
  static void time_update_timer_cb(lv_timer_t *timer);
  static void update_hourly_forecast(void);
+ static void update_daily_forecast(void); // Forward declaration
  
  /**
   * @brief// IP address acquisition event handler for WiFi
@@ -207,6 +208,7 @@
              ESP_LOGI(MAIN_TAG, "Triggering initial weather data update");
              update_weather_data();
              update_hourly_forecast();
+             update_daily_forecast(); 
          } else {
              ESP_LOGW(MAIN_TAG, "NTP returned invalid time");
          }
@@ -439,11 +441,14 @@
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     
+    ESP_LOGI(MAIN_TAG, "update_hourly_forecast: Loop finished. Attempting lv_refr_now.");
     // Force a screen refresh
-    lv_refr_now(NULL);
+    //lv_refr_now(NULL);
+    ESP_LOGI(MAIN_TAG, "update_hourly_forecast: lv_refr_now completed. Attempting lvgl_port_unlock.");
     
     // Release the LVGL lock
     lvgl_port_unlock();
+    ESP_LOGI(MAIN_TAG, "update_hourly_forecast: lvgl_port_unlock completed.");
     
     ESP_LOGI(MAIN_TAG, "Hourly forecast update complete");
 }
@@ -501,6 +506,34 @@ static void update_weather_data(void)
     } else {
         ESP_LOGW(MAIN_TAG, "Received invalid temperature value");
     }
+
+    // Update today's min/max temperature if valid
+    // These are now sourced from daily[0] by weather_client.c
+    if (!isnan(weather.temp_min) && !isnan(weather.temp_max)) {
+        char min_temp_str[10]; // e.g., "Min: 10°"
+        char max_temp_str[10]; // e.g., "Max: 20°"
+        snprintf(min_temp_str, sizeof(min_temp_str), "%.0f°C", weather.temp_min);
+        snprintf(max_temp_str, sizeof(max_temp_str), "%.0f°C", weather.temp_max);
+
+        if (objects.label_current_temp_min) {
+            lv_label_set_text(objects.label_current_temp_min, min_temp_str);
+            lv_label_set_text(objects.label_current_temp_min_1, min_temp_str);
+        }
+        if (objects.label_current_temp_max) {
+            lv_label_set_text(objects.label_current_temp_max, max_temp_str);
+            lv_label_set_text(objects.label_current_temp_max_1, max_temp_str);
+        }
+        ESP_LOGI(MAIN_TAG, "Updated current day min/max temp to: %s / %s", min_temp_str, max_temp_str);
+    } else {
+        ESP_LOGW(MAIN_TAG, "Received invalid min/max temperature value for current day");
+        // Optionally clear or set to default if objects exist
+        if (objects.label_current_temp_min) {
+            lv_label_set_text(objects.label_current_temp_min, "Min: --°");
+        }
+        if (objects.label_current_temp_max) {
+            lv_label_set_text(objects.label_current_temp_max, "Max: --°");
+        }
+    }
     
     // Update weather description if available
     if (weather.description[0] != '\0') {
@@ -554,11 +587,19 @@ static void weather_update_timer_cb(lv_timer_t *timer)
     ESP_LOGI(MAIN_TAG, "Weather update timer triggered");
     
     // Update the main weather data
+    ESP_LOGI(MAIN_TAG, "weather_update_timer_cb: Calling update_weather_data");
     update_weather_data();
+    ESP_LOGI(MAIN_TAG, "weather_update_timer_cb: Returned from update_weather_data");
     
     // Update the hourly forecast
-    ESP_LOGI(MAIN_TAG, "Updating hourly forecast from timer");
+    ESP_LOGI(MAIN_TAG, "weather_update_timer_cb: Calling update_hourly_forecast");
     update_hourly_forecast();
+    ESP_LOGI(MAIN_TAG, "weather_update_timer_cb: Returned from update_hourly_forecast");
+    
+    // Update the daily forecast
+    ESP_LOGI(MAIN_TAG, "weather_update_timer_cb: Calling update_daily_forecast");
+    update_daily_forecast(); 
+    ESP_LOGI(MAIN_TAG, "weather_update_timer_cb: Returned from update_daily_forecast");
 }
 
 /**
@@ -580,13 +621,19 @@ static void weather_update_timer_cb(lv_timer_t *timer)
      weather_update_timer = lv_timer_create(weather_update_timer_cb, 600000, NULL);
      
      // Perform initial time update, weather update will happen after WiFi connection
-     update_time_display();
+     // update_time_display(); // Commented out: This will be handled by deferred_ui_init_cb
      // Weather data update will be triggered after WiFi connection
  }
- 
- /**
-  * @brief Main application entry point
-  */
+
+// Defer initial time display update to avoid LVGL dirty area modification during render
+static void deferred_ui_init_cb(lv_timer_t *timer) {
+    update_time_display();
+    lv_timer_del(timer); // Run only once
+}
+
+/**
+ * @brief Main application entry point
+ */
  void app_main(void)
  {
      // Suppress warning about unused TAG from waveshare_rgb_lcd_port.h
@@ -641,21 +688,17 @@ static void weather_update_timer_cb(lv_timer_t *timer)
          settimeofday(&tv, NULL);
      }
      
+     // Add a small delay to allow LVGL task to run and stabilize before UI creation
+     ESP_LOGI(MAIN_TAG, "Delaying before UI creation...");
+     vTaskDelay(pdMS_TO_TICKS(150)); // Increased delay to 150ms
+
      // Create UI immediately to ensure it's displayed regardless of WiFi/NTP state
      ESP_LOGI(MAIN_TAG, "Creating weather station UI");
      create_weather_ui();
      ESP_LOGI(MAIN_TAG, "Weather station UI created");
-     
-// Defer initial time display update to avoid LVGL dirty area modification during render
-void deferred_ui_init_cb(lv_timer_t *timer) {
-    update_time_display();
-    lv_timer_del(timer);
-}
 
-// ... other code ...
+     lv_timer_create(deferred_ui_init_cb, 100, NULL); // 100 ms delay, relative to this point in app_main
 
-    lv_timer_create(deferred_ui_init_cb, 100, NULL); // 100 ms after UI creation
-     
      // Start WiFi and NTP sync in background - won't block UI
      ESP_LOGI(MAIN_TAG, "Starting WiFi/NTP sync in background");
      
@@ -703,4 +746,95 @@ void deferred_ui_init_cb(lv_timer_t *timer) {
         vTaskDelay(pdMS_TO_TICKS(10)); // 10 ms delay
     }
  }
- 
+
+// @brief Update the daily forecast display
+static void update_daily_forecast(void) {
+    ESP_LOGI(MAIN_TAG, "ENTERED update_daily_forecast function"); // New very first log
+
+    uint8_t total_daily_forecasts = weather_client_get_daily_forecast_count();
+    ESP_LOGI(MAIN_TAG, "Total daily forecasts available (incl. today): %d", total_daily_forecasts);
+
+    int days_to_display_in_panel = 0;
+    if (total_daily_forecasts > 1) {
+        days_to_display_in_panel = total_daily_forecasts - 1;
+    }
+    if (days_to_display_in_panel > 7) {
+        days_to_display_in_panel = 7;
+    }
+    ESP_LOGI(MAIN_TAG, "Calculated days_to_display_in_panel: %d", days_to_display_in_panel);
+
+    // Acquire LVGL lock ONCE before updating all daily forecast UI elements
+    ESP_LOGI(MAIN_TAG, "Attempting to acquire LVGL lock for entire daily forecast update...");
+    if (!lvgl_port_lock(-1)) {
+        ESP_LOGE(MAIN_TAG, "FAILED to acquire LVGL lock for daily forecast update. Aborting.");
+        return; // Cannot proceed without the lock
+    }
+    ESP_LOGI(MAIN_TAG, "LVGL lock acquired for daily forecast update.");
+
+    for (int i = 0; i < 7; ++i) {
+        ESP_LOGI(MAIN_TAG, "Daily forecast loop: Start iteration i = %d", i);
+
+        lv_obj_t* label_day = NULL;
+        lv_obj_t* label_temp_min = NULL;
+        lv_obj_t* label_temp_max = NULL;
+        lv_obj_t* img_icon = NULL;
+
+        switch (i) {
+            case 0: label_day = objects.label_1d; label_temp_min = objects.label_1d_temp_min; label_temp_max = objects.label_1d_temp_max; img_icon = objects.image_1d_weather_icon; break;
+            case 1: label_day = objects.label_2d; label_temp_min = objects.label_2d_temp_min; label_temp_max = objects.label_2d_temp_max; img_icon = objects.image_2d_weather_icon; break;
+            case 2: label_day = objects.label_3d; label_temp_min = objects.label_3d_temp_min; label_temp_max = objects.label_3d_temp_max; img_icon = objects.image_3d_weather_icon; break;
+            case 3: label_day = objects.label_4d; label_temp_min = objects.label_4d_temp_min; label_temp_max = objects.label_4d_temp_max; img_icon = objects.image_4d_weather_icon; break;
+            case 4: label_day = objects.label_5d; label_temp_min = objects.label_5d_temp_min; label_temp_max = objects.label_5d_temp_max; img_icon = objects.image_5d_weather_icon; break;
+            case 5: label_day = objects.label_6d; label_temp_min = objects.label_6d_temp_min; label_temp_max = objects.label_6d_temp_max; img_icon = objects.image_6d_weather_icon; break;
+            case 6: label_day = objects.label_7d; label_temp_min = objects.label_7d_temp_min; label_temp_max = objects.label_7d_temp_max; img_icon = objects.image_7d_weather_icon; break;
+        }
+        ESP_LOGD(MAIN_TAG, "Daily forecast loop i = %d: UI elements assigned", i);
+
+        if (i < days_to_display_in_panel) {
+            daily_forecast_t forecast_data; // Renamed to avoid conflict if 'forecast' is a global or static
+            ESP_LOGD(MAIN_TAG, "Daily forecast loop i = %d: Getting forecast for API daily[%d]", i, i + 1);
+            if (weather_client_get_daily_forecast(i + 1, &forecast_data)) {
+                char day_name_str[4];
+                char temp_min_str[8];
+                char temp_max_str[8];
+
+                struct tm timeinfo_daily;
+                localtime_r(&forecast_data.timestamp, &timeinfo_daily);
+                strftime(day_name_str, sizeof(day_name_str), "%a", &timeinfo_daily);
+                snprintf(temp_min_str, sizeof(temp_min_str), "%.0f°", forecast_data.temp_min);
+                snprintf(temp_max_str, sizeof(temp_max_str), "%.0f°", forecast_data.temp_max);
+
+                ESP_LOGI(MAIN_TAG, "Panel day %d (API daily[%d]): %s - Min: %s, Max: %s - Icon: %s. Attempting LVGL lock.",
+                         i, i + 1, day_name_str, temp_min_str, temp_max_str, forecast_data.icon);
+
+                // LVGL lock is already held, proceed with UI updates
+                if (label_day) lv_label_set_text(label_day, day_name_str);
+                if (label_temp_min) lv_label_set_text(label_temp_min, temp_min_str);
+                if (label_temp_max) lv_label_set_text(label_temp_max, temp_max_str);
+                if (img_icon) set_weather_icon(forecast_data.icon, img_icon);
+
+            } else {
+                ESP_LOGW(MAIN_TAG, "Failed to get daily forecast for panel day %d (API daily[%d]). Clearing UI.", i, i + 1);
+                // LVGL lock is already held, proceed with UI updates
+                if (label_day) lv_label_set_text(label_day, "---");
+                if (label_temp_min) lv_label_set_text(label_temp_min, "--°");
+                if (label_temp_max) lv_label_set_text(label_temp_max, "--°");
+                if (img_icon) lv_img_set_src(img_icon, NULL); // Clear icon
+            }
+        } else { // Hide unused panel days
+            ESP_LOGD(MAIN_TAG, "Daily forecast loop i = %d: Hiding unused panel day.", i);
+            // LVGL lock is already held, proceed with UI updates
+            if (label_day) lv_obj_add_flag(label_day, LV_OBJ_FLAG_HIDDEN);
+            if (label_temp_min) lv_obj_add_flag(label_temp_min, LV_OBJ_FLAG_HIDDEN);
+            if (label_temp_max) lv_obj_add_flag(label_temp_max, LV_OBJ_FLAG_HIDDEN);
+            if (img_icon) lv_obj_add_flag(img_icon, LV_OBJ_FLAG_HIDDEN);
+        }
+        // Remove any vTaskDelay from inside this loop if present
+    }
+
+    // Release the LVGL lock ONCE after all UI updates are done
+    lvgl_port_unlock();
+    ESP_LOGI(MAIN_TAG, "LVGL lock released after daily forecast update.");
+
+    ESP_LOGI(MAIN_TAG, "COMPLETED update_daily_forecast function");
+}
