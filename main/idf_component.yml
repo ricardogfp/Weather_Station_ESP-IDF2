@@ -7,4 +7,3 @@ dependencies:
     public: true
 
   esp_lcd_touch_gt911: "^1"
-

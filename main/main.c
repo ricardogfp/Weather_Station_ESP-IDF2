@@ -29,6 +29,7 @@
  #include "weather_client.h"
  #include "cJSON.h"
  #include "UI/images.h" // Include the images header for weather icons
+ #include "VL6180X.h"      // For VL6180X sensor
  
  // Tag for logging
  static const char *MAIN_TAG = "Main";
@@ -128,6 +129,20 @@
  static const char *lat = OPENWEATHER_LAT;
  static const char *lon = OPENWEATHER_LON;
  
+ // VL6180X Presence Sensor Configuration
+ static VL6180X vl6180x_sensor;
+ static const int PRESENCE_THRESHOLD_MM = 150; // Presence detected if distance < 150mm
+ static const int PRESENCE_TIMEOUT_S = 10;     // Turn off backlight after 10s of no presence
+ static time_t last_presence_time = 0;
+ static bool backlight_on = true;
+ static bool presence_sensor_active = false; // To control sensor task activity
+
+ #define WIFI_MAXIMUM_RETRY 5
+#define NTP_SERVER "pool.ntp.org"
+#define PRESENCE_TIMEOUT_SECONDS 10
+#define PRESENCE_POLL_INTERVAL_MS 5000 // Poll every 5 seconds
+#define MAX_VL6180X_FAILURES 10
+
  // Initialize weather client
  static void init_weather_client(void) {
      weather_client_init(openWeatherMapApiKey, lat, lon);
@@ -169,6 +184,10 @@
  static void time_update_timer_cb(lv_timer_t *timer);
  static void update_hourly_forecast(void);
  static void update_daily_forecast(void); // Forward declaration
+ 
+ // Presence Sensor functions
+ static esp_err_t vl6180x_init(void);
+ static void presence_sensor_task(void *pvParameters);
  
  /**
   * @brief// IP address acquisition event handler for WiFi
@@ -274,7 +293,7 @@
          lv_label_set_text(objects.label_date_1, date_str);
          
          // Update info labels with time source info
-         char info_str[70];
+         char info_str[100]; // Increased size for longer string
          const char* source_text = "";
          switch (time_source) {
              case TIME_SOURCE_NTP: source_text = "NTP"; break;
@@ -282,7 +301,17 @@
              default: source_text = "Internal"; break;
          }
          
-         snprintf(info_str, sizeof(info_str), "Last data update: %s Source: %s", time_str, source_text);
+         // Get the last weather API update time
+         time_t last_weather_update = weather_client_get_last_update_time();
+         char weather_time_str[32] = "Never"; // Default if no update yet
+         if (last_weather_update > 0) {
+             struct tm timeinfo_weather;
+             localtime_r(&last_weather_update, &timeinfo_weather);
+             // Format: HH:MM DD-Mon (e.g., 14:30 24-May)
+             strftime(weather_time_str, sizeof(weather_time_str), "%H:%M", &timeinfo_weather);
+         }
+         
+         snprintf(info_str, sizeof(info_str), "Last data update: %s | Clock source: %s", weather_time_str, source_text);
          lv_label_set_text(objects.label_info, info_str);
          lv_label_set_text(objects.label_info_1, info_str);
          
@@ -354,9 +383,9 @@
         strftime(time_str, sizeof(time_str), "%H:%M", &timeinfo);
         
         // Update temperature (format: XX°)
-        char temp_str[8] = "--°";
+        char temp_str[8] = "--°C";
         if (!isnan(forecast.temperature)) {
-            snprintf(temp_str, sizeof(temp_str), "%.0f°", forecast.temperature);
+            snprintf(temp_str, sizeof(temp_str), "%.0f°C", forecast.temperature);
         }
         
         ESP_LOGI(MAIN_TAG, "Updating forecast %d: %s - %s - %s", 
@@ -697,18 +726,34 @@ static void deferred_ui_init_cb(lv_timer_t *timer) {
      create_weather_ui();
      ESP_LOGI(MAIN_TAG, "Weather station UI created");
 
-     lv_timer_create(deferred_ui_init_cb, 100, NULL); // 100 ms delay, relative to this point in app_main
+     // Initialize VL6180X Presence Sensor
+    ESP_LOGI(MAIN_TAG, "Initializing VL6180X Presence Sensor");
+    if (vl6180x_init() == ESP_OK) {
+        presence_sensor_active = true;
+        ESP_LOGI(MAIN_TAG, "VL6180X Initialized Successfully. I2C port: %d, address: 0x%02x", vl6180x_sensor.i2c_port, 0x29);
+        vTaskDelay(pdMS_TO_TICKS(250)); // Allow sensor to settle after init
+        // Diagnostic: log the first 10 read attempts
+        for (int i = 0; i < 10; ++i) {
+            uint16_t test_range = 0;
+            ESP_LOGI(MAIN_TAG, "Direct test %d: Calling VL6180X_read after init...", i+1);
+            if (VL6180X_read(&vl6180x_sensor, &test_range)) {
+                ESP_LOGI(MAIN_TAG, "Direct test %d: VL6180X measured distance: %d mm", i+1, test_range);
+            } else {
+                ESP_LOGE(MAIN_TAG, "Direct test %d: VL6180X_read failed after init", i+1);
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    } else {
+        ESP_LOGE(MAIN_TAG, "Failed to initialize VL6180X. Presence detection will be disabled.");
+        presence_sensor_active = false;
+    }
 
-     // Start WiFi and NTP sync in background - won't block UI
-     ESP_LOGI(MAIN_TAG, "Starting WiFi/NTP sync in background");
-     
-     // Initialize NVS for WiFi storage
-     esp_err_t ret = nvs_flash_init();
-     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-         ESP_ERROR_CHECK(nvs_flash_erase());
-         ret = nvs_flash_init();
-     }
-     ESP_ERROR_CHECK(ret);
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
      
      // Initialize TCP/IP network interface (should be called only once in app)
      ESP_ERROR_CHECK(esp_netif_init());
@@ -741,6 +786,7 @@ static void deferred_ui_init_cb(lv_timer_t *timer) {
      
      ESP_LOGI(MAIN_TAG, "App initialization complete, time source: %d", time_source);
          // Main loop to keep UI responsive
+    xTaskCreate(presence_sensor_task, "presence_sensor_task", 4096, NULL, 5, NULL);
     while (1) {
         ui_tick();
         vTaskDelay(pdMS_TO_TICKS(10)); // 10 ms delay
@@ -748,7 +794,8 @@ static void deferred_ui_init_cb(lv_timer_t *timer) {
  }
 
 // @brief Update the daily forecast display
-static void update_daily_forecast(void) {
+static void update_daily_forecast(void)
+{
     ESP_LOGI(MAIN_TAG, "ENTERED update_daily_forecast function"); // New very first log
 
     uint8_t total_daily_forecasts = weather_client_get_daily_forecast_count();
@@ -801,8 +848,8 @@ static void update_daily_forecast(void) {
                 struct tm timeinfo_daily;
                 localtime_r(&forecast_data.timestamp, &timeinfo_daily);
                 strftime(day_name_str, sizeof(day_name_str), "%a", &timeinfo_daily);
-                snprintf(temp_min_str, sizeof(temp_min_str), "%.0f°", forecast_data.temp_min);
-                snprintf(temp_max_str, sizeof(temp_max_str), "%.0f°", forecast_data.temp_max);
+                snprintf(temp_min_str, sizeof(temp_min_str), "%.0f°C", forecast_data.temp_min);
+                snprintf(temp_max_str, sizeof(temp_max_str), "%.0f°C", forecast_data.temp_max);
 
                 ESP_LOGI(MAIN_TAG, "Panel day %d (API daily[%d]): %s - Min: %s, Max: %s - Icon: %s. Attempting LVGL lock.",
                          i, i + 1, day_name_str, temp_min_str, temp_max_str, forecast_data.icon);
@@ -817,8 +864,8 @@ static void update_daily_forecast(void) {
                 ESP_LOGW(MAIN_TAG, "Failed to get daily forecast for panel day %d (API daily[%d]). Clearing UI.", i, i + 1);
                 // LVGL lock is already held, proceed with UI updates
                 if (label_day) lv_label_set_text(label_day, "---");
-                if (label_temp_min) lv_label_set_text(label_temp_min, "--°");
-                if (label_temp_max) lv_label_set_text(label_temp_max, "--°");
+                if (label_temp_min) lv_label_set_text(label_temp_min, "--°C");
+                if (label_temp_max) lv_label_set_text(label_temp_max, "--°C");
                 if (img_icon) lv_img_set_src(img_icon, NULL); // Clear icon
             }
         } else { // Hide unused panel days
@@ -837,4 +884,104 @@ static void update_daily_forecast(void) {
     ESP_LOGI(MAIN_TAG, "LVGL lock released after daily forecast update.");
 
     ESP_LOGI(MAIN_TAG, "COMPLETED update_daily_forecast function");
+}
+
+// Initialize VL6180X Sensor
+// Initialize VL6180X Sensor using unclerus/VL6180X API
+static esp_err_t vl6180x_init(void) {
+    // The I2C bus is initialized by waveshare_esp32_s3_rgb_lcd_init(), so just set up the struct and call the library init
+    vl6180x_sensor.i2c_port = I2C_NUM_0; // Use the correct port, as per your wiring
+    // I2C bus is already initialized externally, do NOT call VL6180X_i2cMasterInit here.
+
+    // Initialize VL6180X device
+    if (!VL6180X_init(&vl6180x_sensor)) {
+        ESP_LOGE(MAIN_TAG, "Failed to initialize VL6180X sensor (library VL6180X_init)");
+        return ESP_FAIL;
+    }
+
+    // Attempt to set a longer max convergence time (timing budget)
+    // Default is often around 50ms. Max is 255ms. Let's try 200ms.
+    // This function is part of the ST Microelectronics API, made available by the unclerus component.
+    int status = VL6180x_RangeSetMaxConvergenceTime(vl6180x_sensor.dev, 200); // Set to 200ms
+    if (status != 0) {
+        ESP_LOGW(MAIN_TAG, "Failed to set VL6180X Max Convergence Time to 200ms, status: %d. Using defaults.", status);
+        // Continue anyway, it might work with defaults or whatever VL6180X_Prepare set.
+    } else {
+        ESP_LOGI(MAIN_TAG, "VL6180X Max Convergence Time set to 200ms.");
+    }
+
+    ESP_LOGI(MAIN_TAG, "VL6180X sensor fully configured on I2C port %d, address 0x%02X", vl6180x_sensor.i2c_port, VL6180x_I2C_ADDRESS_DEFAULT);
+    return ESP_OK;
+}
+
+
+
+// Presence Sensor Task
+static void presence_sensor_task(void *pvParameters) {
+    uint16_t range_mm = 0;
+    time_t current_time;
+
+    ESP_LOGI(MAIN_TAG, "Presence sensor task started.");
+
+    // Initialize last_presence_time to current time to keep backlight on initially
+    time(&last_presence_time);
+
+    int consecutive_failures = 0;
+    while (1) {
+        if (!presence_sensor_active) {
+            static int inactive_count = 0;
+            inactive_count++;
+            if (inactive_count % 10 == 0) {
+                ESP_LOGW(MAIN_TAG, "presence_sensor_task running but presence_sensor_active is false (count=%d)", inactive_count);
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000)); // Check periodically if sensor becomes active
+            continue;
+        } else {
+            ESP_LOGD(MAIN_TAG, "presence_sensor_task: presence_sensor_active=true, sensor struct at %p", (void*)&vl6180x_sensor);
+        }
+
+        ESP_LOGD(MAIN_TAG, "Calling VL6180X_read...");
+        // Use the correct API to read distance
+        if (VL6180X_read(&vl6180x_sensor, &range_mm)) {
+            ESP_LOGI(MAIN_TAG, "VL6180X measured distance: %d mm", range_mm);
+            consecutive_failures = 0;
+            if (range_mm < PRESENCE_THRESHOLD_MM) {
+                time(&last_presence_time); // Update last seen time
+                if (!backlight_on) {
+                    ESP_LOGI(MAIN_TAG, "Presence detected, turning backlight ON.");
+                    wavesahre_rgb_lcd_bl_on();
+                    backlight_on = true;
+                }
+            }
+        } else {
+            // Try to extract more error info by repeating the internal logic
+            VL6180x_RangeData_t debug_range;
+            int debug_status = VL6180x_RangePollMeasurement(vl6180x_sensor.dev, &debug_range);
+            ESP_LOGW(MAIN_TAG, "Failed to read VL6180X range (VL6180X_read returned false). Counting failure.");
+            ESP_LOGI(MAIN_TAG, "VL6180X read failed - no distance measured. Sensor struct at %p", (void*)&vl6180x_sensor);
+            ESP_LOGE(MAIN_TAG, "Detailed error: i2c status: %ld, range status: %ld", (long)debug_status, (long)debug_range.errorStatus);
+            consecutive_failures++;
+            if (consecutive_failures >= MAX_VL6180X_FAILURES) {
+                ESP_LOGW(MAIN_TAG, "%d consecutive VL6180X read failures. Will continue attempting reads.", consecutive_failures);
+                // presence_sensor_active = false; // Sensor will NOT be disabled
+                consecutive_failures = 0; // Reset counter to allow re-logging if failures persist
+                // If backlight was off during a spree of failures, ensure it's turned back on.
+                // This might be useful if the user expects the screen to be on if they are interacting with it, even if sensor is struggling.
+                if (!backlight_on) {
+                    ESP_LOGI(MAIN_TAG, "Ensuring backlight is ON after multiple sensor read failures.");
+                    wavesahre_rgb_lcd_bl_on();
+                    backlight_on = true;
+                }
+            }
+        }
+
+        time(&current_time);
+        if (backlight_on && (difftime(current_time, last_presence_time) > PRESENCE_TIMEOUT_S)) {
+            ESP_LOGI(MAIN_TAG, "No presence detected for %d seconds, turning backlight OFF.", PRESENCE_TIMEOUT_S);
+            wavesahre_rgb_lcd_bl_off();
+            backlight_on = false;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(PRESENCE_POLL_INTERVAL_MS)); // Read sensor according to define
+    }
 }

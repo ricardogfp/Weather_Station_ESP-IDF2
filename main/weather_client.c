@@ -25,12 +25,20 @@ static weather_data_t current_weather = {
     .icon = "",
     .condition = WEATHER_UNKNOWN,
     .hourly_count = 0,
-    .last_forecast_update = 0,
-    .daily_count = 0 // Initialize daily_count
-    // .daily array will be zero-initialized by static storage duration
+    .last_forecast_update = 0, // This is for forecast calculation time
+    .daily_count = 0
 };
+
+// Timestamp of the last successful API data update
+static time_t s_last_update_time = 0;
+
 static char *response_buffer = NULL;
 static size_t response_len = 0;
+
+// Getter for the last API update timestamp
+time_t weather_client_get_last_update_time(void) {
+    return s_last_update_time;
+}
 
 // HTTP client event handler
 static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
@@ -160,7 +168,7 @@ static esp_err_t parse_weather_data(const char *json_str) {
         return ESP_FAIL;
     }
 
-    // Get current time for forecast window calculation
+    // Get current time for forecast window calculation and for last_forecast_update field
     time_t now;
     time(&now);
     struct tm timeinfo;
@@ -233,16 +241,13 @@ static esp_err_t parse_weather_data(const char *json_str) {
                     cJSON *weather_item_hourly = cJSON_GetArrayItem(weather_array_hourly, 0);
                     const char *icon_code_hourly = cJSON_GetObjectItem(weather_item_hourly, "icon") ? 
                                                    cJSON_GetObjectItem(weather_item_hourly, "icon")->valuestring : "01d";
-                    strncpy(current_weather.hourly[current_weather.hourly_count].icon, 
-                            icon_code_hourly, MAX_WEATHER_ICON_LEN - 1);
+                    strncpy(current_weather.hourly[current_weather.hourly_count].icon, icon_code_hourly, MAX_WEATHER_ICON_LEN - 1);
                     current_weather.hourly[current_weather.hourly_count].icon[MAX_WEATHER_ICON_LEN - 1] = '\0';
-                    current_weather.hourly[current_weather.hourly_count].condition = 
-                        map_weather_condition(current_weather.hourly[current_weather.hourly_count].icon);
                 }
                 current_weather.hourly_count++;
             }
         }
-        ESP_LOGI(TAG, "Loaded %d hourly forecasts", current_weather.hourly_count);
+        ESP_LOGI(TAG, "Stored %d hourly forecasts", current_weather.hourly_count);
     }
 
     // Parse daily forecast
@@ -250,40 +255,55 @@ static esp_err_t parse_weather_data(const char *json_str) {
     if (cJSON_IsArray(daily_array)) {
         current_weather.daily_count = 0; // Reset count before parsing
         int num_daily = cJSON_GetArraySize(daily_array);
-        ESP_LOGI(TAG, "Daily forecast items in JSON: %d", num_daily);
+        ESP_LOGI(TAG, "Daily forecast items in JSON: %d. MAX_DAILY_FORECAST is %d", num_daily, MAX_DAILY_FORECAST);
         for (int i = 0; i < num_daily && current_weather.daily_count < MAX_DAILY_FORECAST; ++i) {
             cJSON *item = cJSON_GetArrayItem(daily_array, i);
-            if (!item) continue;
+            if (!item) {
+                ESP_LOGW(TAG, "Daily JSON item at array index %d is NULL.", i);
+                continue;
+            }
 
-            current_weather.daily[current_weather.daily_count].timestamp =
+            // Store index for current_weather.daily array
+            int current_daily_idx = current_weather.daily_count;
+
+            current_weather.daily[current_daily_idx].timestamp =
                 cJSON_GetObjectItem(item, "dt") ? (time_t)cJSON_GetObjectItem(item, "dt")->valueint : 0;
 
             cJSON *temp_obj = cJSON_GetObjectItem(item, "temp");
             if (temp_obj) {
-                current_weather.daily[current_weather.daily_count].temp_min =
-                    cJSON_GetObjectItem(temp_obj, "min") ? cJSON_GetObjectItem(temp_obj, "min")->valuedouble : NAN;
-                current_weather.daily[current_weather.daily_count].temp_max =
-                    cJSON_GetObjectItem(temp_obj, "max") ? cJSON_GetObjectItem(temp_obj, "max")->valuedouble : NAN;
+                cJSON *min_temp_item = cJSON_GetObjectItem(temp_obj, "min");
+                cJSON *max_temp_item = cJSON_GetObjectItem(temp_obj, "max");
+
+                current_weather.daily[current_daily_idx].temp_min = min_temp_item ? min_temp_item->valuedouble : NAN;
+                current_weather.daily[current_daily_idx].temp_max = max_temp_item ? max_temp_item->valuedouble : NAN;
+
+                if (!min_temp_item) ESP_LOGW(TAG, "Daily[%d] (JSON index %d): temp.min missing.", current_daily_idx, i);
+                if (!max_temp_item) ESP_LOGW(TAG, "Daily[%d] (JSON index %d): temp.max missing.", current_daily_idx, i);
+
             } else {
-                current_weather.daily[current_weather.daily_count].temp_min = NAN;
-                current_weather.daily[current_weather.daily_count].temp_max = NAN;
+                current_weather.daily[current_daily_idx].temp_min = NAN;
+                current_weather.daily[current_daily_idx].temp_max = NAN;
+                ESP_LOGW(TAG, "Daily[%d] (JSON index %d): temp object missing.", current_daily_idx, i);
             }
 
             cJSON *weather_array_daily = cJSON_GetObjectItem(item, "weather");
             if (cJSON_IsArray(weather_array_daily) && cJSON_GetArraySize(weather_array_daily) > 0) {
                 cJSON *weather_item_daily = cJSON_GetArrayItem(weather_array_daily, 0);
                 const char *icon_str = cJSON_GetObjectItem(weather_item_daily, "icon") ? cJSON_GetObjectItem(weather_item_daily, "icon")->valuestring : "";
-                strncpy(current_weather.daily[current_weather.daily_count].icon, icon_str, sizeof(current_weather.daily[current_weather.daily_count].icon) - 1);
-                current_weather.daily[current_weather.daily_count].icon[sizeof(current_weather.daily[current_weather.daily_count].icon) - 1] = '\0';
+                strncpy(current_weather.daily[current_daily_idx].icon, icon_str, sizeof(current_weather.daily[current_daily_idx].icon) - 1);
+                current_weather.daily[current_daily_idx].icon[sizeof(current_weather.daily[current_daily_idx].icon) - 1] = '\0';
             } else {
-                current_weather.daily[current_weather.daily_count].icon[0] = '\0';
+                current_weather.daily[current_daily_idx].icon[0] = '\0';
+                ESP_LOGW(TAG, "Daily[%d] (JSON index %d): weather array missing or empty.", current_daily_idx, i);
             }
-            ESP_LOGD(TAG, "Daily[%d]: ts=%ld, min=%.1f, max=%.1f, icon=%s", 
-                current_weather.daily_count,
-                (long)current_weather.daily[current_weather.daily_count].timestamp,
-                current_weather.daily[current_weather.daily_count].temp_min,
-                current_weather.daily[current_weather.daily_count].temp_max,
-                current_weather.daily[current_weather.daily_count].icon);
+            // Log after assigning all values for current_weather.daily[current_daily_idx]
+            ESP_LOGI(TAG, "Parsed Daily[%d] (JSON index %d): ts=%ld, min=%.1f, max=%.1f, icon=%s",
+                current_daily_idx,
+                i, // Log JSON array index as well
+                (long)current_weather.daily[current_daily_idx].timestamp,
+                current_weather.daily[current_daily_idx].temp_min,
+                current_weather.daily[current_daily_idx].temp_max,
+                current_weather.daily[current_daily_idx].icon);
             current_weather.daily_count++;
         }
     } else {
@@ -294,20 +314,33 @@ static esp_err_t parse_weather_data(const char *json_str) {
     // After parsing daily forecasts, if today's forecast (daily[0]) is available,
     // use its min/max for the current_weather's main temp_min and temp_max.
     if (current_weather.daily_count > 0) {
-        current_weather.temp_min = current_weather.daily[0].temp_min;
-        current_weather.temp_max = current_weather.daily[0].temp_max;
-        ESP_LOGI(TAG, "Updated current_weather.temp_min/max from daily[0]: %.1f°C / %.1f°C", 
-                 current_weather.temp_min, current_weather.temp_max);
+        ESP_LOGI(TAG, "Attempting to update current day's min/max from daily[0]. Values: daily[0].temp_min=%.1f, daily[0].temp_max=%.1f",
+                 current_weather.daily[0].temp_min, current_weather.daily[0].temp_max);
+
+        if (!isnan(current_weather.daily[0].temp_min) && !isnan(current_weather.daily[0].temp_max)) {
+            current_weather.temp_min = current_weather.daily[0].temp_min;
+            current_weather.temp_max = current_weather.daily[0].temp_max;
+            ESP_LOGI(TAG, "Updated current day's min/max: %.1f°C / %.1f°C",
+                     current_weather.temp_min, current_weather.temp_max);
+        } else {
+            ESP_LOGW(TAG, "daily[0] has invalid min/max (NaN). Min: %.1f, Max: %.1f. current_weather.temp_min/max (currently %.1f/%.1f) will not be updated from daily[0].",
+                     current_weather.daily[0].temp_min, current_weather.daily[0].temp_max, current_weather.temp_min, current_weather.temp_max);
+        }
     } else {
-        // If no daily forecast, ensure current_weather.temp_min/max are NAN or some default
-        // (They might have been set by the 'current' weather section if that's preferred as a fallback)
-        // For now, we assume if daily[0] is not there, we don't override what 'current' might have set.
-        // If 'current' doesn't set them, they remain as initialized (likely NAN or 0).
-        ESP_LOGW(TAG, "No daily forecast data to update current_weather.temp_min/max.");
+        ESP_LOGW(TAG, "No daily forecast data available (daily_count = %d) to update current day's min/max. current_weather.temp_min/max remain %.1f/%.1f.",
+                 current_weather.daily_count, current_weather.temp_min, current_weather.temp_max);
     }
 
+    // Update the forecast calculation timestamp
     current_weather.last_forecast_update = now;
+
     cJSON_Delete(root);
+    ESP_LOGI(TAG, "Successfully parsed weather data.");
+
+    // Update the last API update timestamp *after* all successful parsing
+    s_last_update_time = time(NULL);
+    ESP_LOGI(TAG, "Last weather API update timestamp set to: %lld", (long long)s_last_update_time);
+
     return ESP_OK;
 }
 

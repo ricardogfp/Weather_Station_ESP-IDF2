@@ -150,4 +150,15 @@ uint8_t weather_client_get_daily_forecast_count(void);
  */
 time_t weather_client_get_next_forecast_update(void);
 
+/**
+ * @brief Get the timestamp of the last successful weather data update
+ * @return time_t Timestamp of the last update, or 0 if never updated
+ */
+time_t weather_client_get_last_update_time(void);
+
+/**
+ * @brief Clean up the weather client
+ */
+void weather_client_cleanup(void);
+
 #endif /* WEATHER_CLIENT_H */
