@@ -29,7 +29,9 @@
  #include "weather_client.h"
  #include "cJSON.h"
  #include "UI/images.h" // Include the images header for weather icons
- #include "VL6180X.h"      // For VL6180X sensor
+ // #include "VL6180X.h" // Replaced with VL53L1X
+#include "vl53l1x.h" // For VL53L1X sensor
+#include "i2cdev.h"  // For I2C communication with VL53L1X via TeschRenan component      // For VL6180X sensor
  
  // Tag for logging
  static const char *MAIN_TAG = "Main";
@@ -129,9 +131,21 @@
  static const char *lat = OPENWEATHER_LAT;
  static const char *lon = OPENWEATHER_LON;
  
- // VL6180X Presence Sensor Configuration
- static VL6180X vl6180x_sensor;
- static const int PRESENCE_THRESHOLD_MM = 150; // Presence detected if distance < 150mm
+ // VL53L1X Presence Sensor Configuration
+ static VL53L1_Dev_t vl53l1x_dev;
+ static I2cDrv i2c_bus_vl53l1x;
+
+ // VL53L1X I2C Configuration (matches TeschRenan example structure)
+ // Ensure these pins match your hardware connections for VL53L1X
+ static const I2cDef I2CConfig_vl53l1x = {
+     .i2cPort            = I2C_NUM_0, // Assuming same I2C port as VL6180X
+     .i2cClockSpeed      = 400000,    // Standard I2C speed for VL53L1X
+     .gpioSCLPin         = GPIO_NUM_9, // Your SCL pin
+     .gpioSDAPin         = GPIO_NUM_8, // Your SDA pin
+     .gpioPullup         = GPIO_PULLUP_ENABLE,
+ };
+
+ static const int PRESENCE_THRESHOLD_MM = 150; // Presence detected if distance < 150mm (can be adjusted for VL53L1X)
  static const int PRESENCE_TIMEOUT_S = 10;     // Turn off backlight after 10s of no presence
  static time_t last_presence_time = 0;
  static bool backlight_on = true;
@@ -141,7 +155,6 @@
 #define NTP_SERVER "pool.ntp.org"
 #define PRESENCE_TIMEOUT_SECONDS 10
 #define PRESENCE_POLL_INTERVAL_MS 5000 // Poll every 5 seconds
-#define MAX_VL6180X_FAILURES 10
 
  // Initialize weather client
  static void init_weather_client(void) {
@@ -186,7 +199,7 @@
  static void update_daily_forecast(void); // Forward declaration
  
  // Presence Sensor functions
- static esp_err_t vl6180x_init(void);
+ static esp_err_t vl53l1x_sensor_init(void);
  static void presence_sensor_task(void *pvParameters);
  
  /**
@@ -726,34 +739,22 @@ static void deferred_ui_init_cb(lv_timer_t *timer) {
      create_weather_ui();
      ESP_LOGI(MAIN_TAG, "Weather station UI created");
 
-     // Initialize VL6180X Presence Sensor
-    ESP_LOGI(MAIN_TAG, "Initializing VL6180X Presence Sensor");
-    if (vl6180x_init() == ESP_OK) {
-        presence_sensor_active = true;
-        ESP_LOGI(MAIN_TAG, "VL6180X Initialized Successfully. I2C port: %d, address: 0x%02x", vl6180x_sensor.i2c_port, 0x29);
-        vTaskDelay(pdMS_TO_TICKS(250)); // Allow sensor to settle after init
-        // Diagnostic: log the first 10 read attempts
-        for (int i = 0; i < 10; ++i) {
-            uint16_t test_range = 0;
-            ESP_LOGI(MAIN_TAG, "Direct test %d: Calling VL6180X_read after init...", i+1);
-            if (VL6180X_read(&vl6180x_sensor, &test_range)) {
-                ESP_LOGI(MAIN_TAG, "Direct test %d: VL6180X measured distance: %d mm", i+1, test_range);
-            } else {
-                ESP_LOGE(MAIN_TAG, "Direct test %d: VL6180X_read failed after init", i+1);
-            }
-            vTaskDelay(pdMS_TO_TICKS(50));
-        }
-    } else {
-        ESP_LOGE(MAIN_TAG, "Failed to initialize VL6180X. Presence detection will be disabled.");
-        presence_sensor_active = false;
-    }
+     // Initialize VL53L1X sensor
+     ESP_LOGI(MAIN_TAG, "Initializing VL53L1X sensor...");
+     if (vl53l1x_sensor_init() == ESP_OK) {
+         presence_sensor_active = true;
+         ESP_LOGI(MAIN_TAG, "VL53L1X sensor initialized successfully.");
+     } else {
+         ESP_LOGE(MAIN_TAG, "Failed to initialize VL53L1X sensor.");
+         presence_sensor_active = false;
+     }
 
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
+     esp_err_t ret = nvs_flash_init();
+     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+         ESP_ERROR_CHECK(nvs_flash_erase());
+         ret = nvs_flash_init();
+     }
+     ESP_ERROR_CHECK(ret);
      
      // Initialize TCP/IP network interface (should be called only once in app)
      ESP_ERROR_CHECK(esp_netif_init());
@@ -886,102 +887,191 @@ static void update_daily_forecast(void)
     ESP_LOGI(MAIN_TAG, "COMPLETED update_daily_forecast function");
 }
 
-// Initialize VL6180X Sensor
-// Initialize VL6180X Sensor using unclerus/VL6180X API
-static esp_err_t vl6180x_init(void) {
-    // The I2C bus is initialized by waveshare_esp32_s3_rgb_lcd_init(), so just set up the struct and call the library init
-    vl6180x_sensor.i2c_port = I2C_NUM_0; // Use the correct port, as per your wiring
-    // I2C bus is already initialized externally, do NOT call VL6180X_i2cMasterInit here.
+// Initialize VL53L1X sensor
+static esp_err_t vl53l1x_sensor_init(void) {
+    ESP_LOGI(MAIN_TAG, "Initializing VL53L1X sensor...");
 
-    // Initialize VL6180X device
-    if (!VL6180X_init(&vl6180x_sensor)) {
-        ESP_LOGE(MAIN_TAG, "Failed to initialize VL6180X sensor (library VL6180X_init)");
+    // Setup I2C bus configuration for VL53L1X
+    i2c_bus_vl53l1x.def = &I2CConfig_vl53l1x;
+
+    // Initialize the sensor using the TeschRenan/VL53L1X component's init function
+    // The component's vl53l1xInit function takes VL53L1_Dev_t* and I2cDrv*
+    // It internally handles i2cdev_init and sets the device address.
+    if (!vl53l1xInit(&vl53l1x_dev, &i2c_bus_vl53l1x)) {
+        ESP_LOGE(MAIN_TAG, "Failed to initialize VL53L1X sensor (vl53l1xInit failed).");
+        presence_sensor_active = false;
         return ESP_FAIL;
     }
+    ESP_LOGI(MAIN_TAG, "VL53L1X sensor vl53l1xInit successful. Device I2C address: 0x%02X", vl53l1x_dev.I2cDevAddr);
 
-    // Attempt to set a longer max convergence time (timing budget)
-    // Default is often around 50ms. Max is 255ms. Let's try 200ms.
-    // This function is part of the ST Microelectronics API, made available by the unclerus component.
-    int status = VL6180x_RangeSetMaxConvergenceTime(vl6180x_sensor.dev, 200); // Set to 200ms
-    if (status != 0) {
-        ESP_LOGW(MAIN_TAG, "Failed to set VL6180X Max Convergence Time to 200ms, status: %d. Using defaults.", status);
-        // Continue anyway, it might work with defaults or whatever VL6180X_Prepare set.
+    VL53L1_Error status;
+
+    // Wait for device to boot up
+    status = VL53L1_WaitDeviceBooted(&vl53l1x_dev);
+    if (status != VL53L1_ERROR_NONE) {
+        ESP_LOGE(MAIN_TAG, "VL53L1_WaitDeviceBooted failed: %d", status);
+        presence_sensor_active = false;
+        return ESP_FAIL;
+    }
+    ESP_LOGI(MAIN_TAG, "VL53L1X device booted.");
+
+    // Initialize sensor data structures
+    status = VL53L1_DataInit(&vl53l1x_dev);
+    if (status != VL53L1_ERROR_NONE) {
+        ESP_LOGE(MAIN_TAG, "VL53L1_DataInit failed: %d", status);
+        presence_sensor_active = false;
+        return ESP_FAIL;
+    }
+    ESP_LOGI(MAIN_TAG, "VL53L1X DataInit successful.");
+
+    // Perform static initialization
+    status = VL53L1_StaticInit(&vl53l1x_dev);
+    if (status != VL53L1_ERROR_NONE) {
+        ESP_LOGE(MAIN_TAG, "VL53L1_StaticInit failed: %d", status);
+        presence_sensor_active = false;
+        return ESP_FAIL;
+    }
+    ESP_LOGI(MAIN_TAG, "VL53L1X StaticInit successful.");
+
+    // Configure sensor for long distance mode
+    status = VL53L1_SetDistanceMode(&vl53l1x_dev, VL53L1_DISTANCEMODE_LONG);
+    if (status != VL53L1_ERROR_NONE) {
+        ESP_LOGE(MAIN_TAG, "VL53L1_SetDistanceMode (LONG) failed: %d", status);
+        presence_sensor_active = false;
+        return ESP_FAIL; // If mode setting fails, it's a critical error
     } else {
-        ESP_LOGI(MAIN_TAG, "VL6180X Max Convergence Time set to 200ms.");
+        ESP_LOGI(MAIN_TAG, "VL53L1X distance mode set to LONG.");
     }
 
-    ESP_LOGI(MAIN_TAG, "VL6180X sensor fully configured on I2C port %d, address 0x%02X", vl6180x_sensor.i2c_port, VL6180x_I2C_ADDRESS_DEFAULT);
+    // Set measurement timing budget (e.g., 50ms). Longer budget for better accuracy at longer distances.
+    // Min for LONG mode is 33ms. Max is not strictly defined but affects update rate.
+    // 50000 microseconds = 50ms.
+    uint32_t timing_budget_us = 50000;
+    status = VL53L1_SetMeasurementTimingBudgetMicroSeconds(&vl53l1x_dev, timing_budget_us);
+    if (status != VL53L1_ERROR_NONE) {
+        ESP_LOGE(MAIN_TAG, "VL53L1_SetMeasurementTimingBudgetMicroSeconds (%lu us) failed: %d", timing_budget_us, status);
+        presence_sensor_active = false;
+        return ESP_FAIL; // Critical if timing budget cannot be set
+    } else {
+        ESP_LOGI(MAIN_TAG, "VL53L1X timing budget set to %lu us.", timing_budget_us);
+    }
+
+    // The presence_sensor_task will handle starting/stopping measurements for each read.
+    // So, no need to call VL53L1_StartMeasurement here after initial setup.
+
+    presence_sensor_active = true;
+    ESP_LOGI(MAIN_TAG, "VL53L1X sensor initialized successfully and is active.");
     return ESP_OK;
 }
 
 
 
 // Presence Sensor Task
+// Presence Sensor Task
 static void presence_sensor_task(void *pvParameters) {
-    uint16_t range_mm = 0;
+    uint16_t range_mm = 0; // Stores the measured range
     time_t current_time;
+    VL53L1_RangingMeasurementData_t ranging_data;
+    VL53L1_Error status;
 
-    ESP_LOGI(MAIN_TAG, "Presence sensor task started.");
+    ESP_LOGI(MAIN_TAG, "Presence sensor task started (VL53L1X).");
 
     // Initialize last_presence_time to current time to keep backlight on initially
     time(&last_presence_time);
 
     int consecutive_failures = 0;
+    const int MAX_SENSOR_FAILURES = 10; // Renamed for clarity
+    const uint32_t DATA_READY_TIMEOUT_MS = 200; // Timeout for waiting for data ready (e.g. 4x timing budget)
+
     while (1) {
         if (!presence_sensor_active) {
             static int inactive_count = 0;
             inactive_count++;
             if (inactive_count % 10 == 0) {
-                ESP_LOGW(MAIN_TAG, "presence_sensor_task running but presence_sensor_active is false (count=%d)", inactive_count);
+                ESP_LOGW(MAIN_TAG, "presence_sensor_task (VL53L1X) running but presence_sensor_active is false (count=%d)", inactive_count);
             }
             vTaskDelay(pdMS_TO_TICKS(1000)); // Check periodically if sensor becomes active
             continue;
-        } else {
-            ESP_LOGD(MAIN_TAG, "presence_sensor_task: presence_sensor_active=true, sensor struct at %p", (void*)&vl6180x_sensor);
         }
 
-        ESP_LOGD(MAIN_TAG, "Calling VL6180X_read...");
-        // Use the correct API to read distance
-        if (VL6180X_read(&vl6180x_sensor, &range_mm)) {
-            ESP_LOGI(MAIN_TAG, "VL6180X measured distance: %d mm", range_mm);
-            consecutive_failures = 0;
-            if (range_mm < PRESENCE_THRESHOLD_MM) {
-                time(&last_presence_time); // Update last seen time
-                if (!backlight_on) {
-                    ESP_LOGI(MAIN_TAG, "Presence detected, turning backlight ON.");
-                    wavesahre_rgb_lcd_bl_on();
-                    backlight_on = true;
+        ESP_LOGD(MAIN_TAG, "VL53L1X: Starting measurement cycle.");
+        status = VL53L1_StartMeasurement(&vl53l1x_dev);
+        if (status != VL53L1_ERROR_NONE) {
+            ESP_LOGE(MAIN_TAG, "VL53L1_StartMeasurement failed: %d. Incrementing failures.", status);
+            consecutive_failures++;
+        } else {
+            uint8_t data_ready = 0;
+            uint32_t start_time_ms = esp_log_timestamp(); // For timeout
+
+            // Poll for data ready with timeout
+            while (data_ready == 0 && (esp_log_timestamp() - start_time_ms < DATA_READY_TIMEOUT_MS)) {
+                status = VL53L1_GetMeasurementDataReady(&vl53l1x_dev, &data_ready);
+                if (status != VL53L1_ERROR_NONE) {
+                    ESP_LOGE(MAIN_TAG, "VL53L1_GetMeasurementDataReady failed: %d. Breaking poll loop.", status);
+                    break; // Exit polling loop on error
+                }
+                if (data_ready == 0) {
+                    vTaskDelay(pdMS_TO_TICKS(10)); // Wait briefly before polling again
                 }
             }
-        } else {
-            // Try to extract more error info by repeating the internal logic
-            VL6180x_RangeData_t debug_range;
-            int debug_status = VL6180x_RangePollMeasurement(vl6180x_sensor.dev, &debug_range);
-            ESP_LOGW(MAIN_TAG, "Failed to read VL6180X range (VL6180X_read returned false). Counting failure.");
-            ESP_LOGI(MAIN_TAG, "VL6180X read failed - no distance measured. Sensor struct at %p", (void*)&vl6180x_sensor);
-            ESP_LOGE(MAIN_TAG, "Detailed error: i2c status: %ld, range status: %ld", (long)debug_status, (long)debug_range.errorStatus);
-            consecutive_failures++;
-            if (consecutive_failures >= MAX_VL6180X_FAILURES) {
-                ESP_LOGW(MAIN_TAG, "%d consecutive VL6180X read failures. Will continue attempting reads.", consecutive_failures);
-                // presence_sensor_active = false; // Sensor will NOT be disabled
-                consecutive_failures = 0; // Reset counter to allow re-logging if failures persist
-                // If backlight was off during a spree of failures, ensure it's turned back on.
-                // This might be useful if the user expects the screen to be on if they are interacting with it, even if sensor is struggling.
-                if (!backlight_on) {
-                    ESP_LOGI(MAIN_TAG, "Ensuring backlight is ON after multiple sensor read failures.");
-                    wavesahre_rgb_lcd_bl_on();
-                    backlight_on = true;
+
+            if (data_ready && status == VL53L1_ERROR_NONE) {
+                status = VL53L1_GetRangingMeasurementData(&vl53l1x_dev, &ranging_data);
+                if (status == VL53L1_ERROR_NONE) {
+                    if (ranging_data.RangeStatus == VL53L1_RANGESTATUS_RANGE_VALID) {
+                        range_mm = ranging_data.RangeMilliMeter;
+                        ESP_LOGI(MAIN_TAG, "VL53L1X measured distance: %d mm (Status: %d)", range_mm, ranging_data.RangeStatus);
+                        consecutive_failures = 0; // Reset failures on successful valid read
+
+                        if (range_mm < PRESENCE_THRESHOLD_MM) {
+                            time(&last_presence_time); // Update last seen time
+                            if (!backlight_on) {
+                                ESP_LOGI(MAIN_TAG, "Presence detected (VL53L1X), turning backlight ON.");
+                                wavesahre_rgb_lcd_bl_on();
+                                backlight_on = true;
+                            }
+                        }
+                    } else {
+                        // Valid measurement but range status indicates an issue (e.g., out of bounds, signal fail)
+                        ESP_LOGW(MAIN_TAG, "VL53L1X measurement valid but range status not OK: %d. Distance: %d mm. Incrementing failures.", ranging_data.RangeStatus, ranging_data.RangeMilliMeter);
+                        consecutive_failures++;
+                    }
+                } else {
+                    ESP_LOGE(MAIN_TAG, "VL53L1_GetRangingMeasurementData failed: %d. Incrementing failures.", status);
+                    consecutive_failures++;
                 }
+            } else if (status == VL53L1_ERROR_NONE && data_ready == 0) {
+                ESP_LOGW(MAIN_TAG, "VL53L1X data not ready within timeout. Incrementing failures.");
+                consecutive_failures++;
+            } else {
+                 // Error occurred in VL53L1_GetMeasurementDataReady or VL53L1_StartMeasurement
+                 ESP_LOGE(MAIN_TAG, "VL53L1X read cycle failed before GetRangingMeasurementData. API status: %d. Incrementing failures.", status);
+                 consecutive_failures++; // Already incremented if StartMeasurement failed
+            }
+            
+            // Clear interrupt and stop measurement. The next loop iteration will start a new one.
+            // This is a simple way to handle single-shot style measurements per loop iteration.
+            // VL53L1_ClearInterruptAndStartMeasurement could be used if an interrupt pin was configured and used.
+            VL53L1_StopMeasurement(&vl53l1x_dev); // Stop to ensure clean state for next StartMeasurement
+        }
+
+        if (consecutive_failures >= MAX_SENSOR_FAILURES) {
+            ESP_LOGW(MAIN_TAG, "%d consecutive VL53L1X read failures. Will continue attempting reads.", consecutive_failures);
+            consecutive_failures = 0; // Reset counter to allow re-logging if failures persist
+            if (!backlight_on) {
+                ESP_LOGI(MAIN_TAG, "Ensuring backlight is ON after multiple VL53L1X sensor read failures.");
+                wavesahre_rgb_lcd_bl_on();
+                backlight_on = true;
             }
         }
 
         time(&current_time);
         if (backlight_on && (difftime(current_time, last_presence_time) > PRESENCE_TIMEOUT_S)) {
-            ESP_LOGI(MAIN_TAG, "No presence detected for %d seconds, turning backlight OFF.", PRESENCE_TIMEOUT_S);
+            ESP_LOGI(MAIN_TAG, "No presence detected for %d seconds (VL53L1X), turning backlight OFF.", PRESENCE_TIMEOUT_S);
             wavesahre_rgb_lcd_bl_off();
             backlight_on = false;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(PRESENCE_POLL_INTERVAL_MS)); // Read sensor according to define
+        vTaskDelay(pdMS_TO_TICKS(PRESENCE_POLL_INTERVAL_MS));
     }
 }
