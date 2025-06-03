@@ -2,18 +2,18 @@
 #define SECRETS_H
 
 // WiFi credentials
-#define WIFI_SSID "SSID"
-#define WIFI_PASSWORD "Password"
+#define WIFI_SSID "Kailua"
+#define WIFI_PASSWORD "S4mL30v4N3_R"
 
 // Home Assistant configuration
-#define HA_URL "https://localhost:8123"
-#define HA_TOKEN "HA_TOKEN"
+#define HA_URL "https://192.168.6.11:8123"
+#define HA_TOKEN "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJlYmU1MDIyYThhODY0MWU4OTM2ZDI4ZGY4NGYwOWNhNSIsImlhdCI6MTc0NTI1OTI5NCwiZXhwIjoyMDYwNjE5Mjk0fQ.-ir8SscnYhs978FR_ebBoFvPiN0Lod-nr5LqT4yYWuo"
 
 // OpenWeatherMap API
-#define OPENWEATHER_API_KEY "API_KEY"
-#define OPENWEATHER_LAT "LAT"  
-#define OPENWEATHER_LON "LON" 
-#define OPENWEATHER_CITY "City" 
+#define OPENWEATHER_API_KEY "b2c0beef44dd157da425e740c95d37d0"
+#define OPENWEATHER_LAT "40.68"  
+#define OPENWEATHER_LON "-3.62" 
+#define OPENWEATHER_CITY "San Aguntin del Guadalix" 
 
 //Time zone
 /* Set timezone to Central European Time (CET/CEST)

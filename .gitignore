@@ -3,7 +3,7 @@ build/
 sdkconfig
 sdkconfig.old
 
-# Sensitive data
+# Sensitive data (do not commit your real secrets!)
 main/secrets.h
 
 # Compiled files
@@ -24,7 +24,7 @@ __pycache__/
 *$py.class
 
 # Keep the template but not the actual secrets
-!main/secrets.h.template
+!main/secrets_template.h
 
 # PlatformIO
 .pio/
