@@ -9,8 +9,6 @@
  #include <time.h>
  #include <sys/time.h>
  #include "secrets.h"
- // Suppress unused variable warnings
- #define SUPPRESS_UNUSED_WARNING(x) (void)(x)
  #include "esp_log.h"
  #include "esp_system.h"
  #include "nvs_flash.h"
@@ -20,7 +18,6 @@
  #include "freertos/task.h"
  #include "freertos/timers.h"
  #include "lvgl.h"
- 
  #include "waveshare_rgb_lcd_port.h"
  #include "ds3231.h"
  #include "wifi_manager.h"
@@ -29,6 +26,7 @@
  #include "weather_client.h"
  #include "cJSON.h"
  #include "UI/images.h" // Include the images header for weather icons
+ #include "presence_sensor.h"
  
  // Tag for logging
  static const char *MAIN_TAG = "Main";
@@ -128,13 +126,6 @@
  static const char *lat = OPENWEATHER_LAT;
  static const char *lon = OPENWEATHER_LON;
  
- // LD2410C AS pin (GPIO 6) presence detection
- static const int LD2410C_PRESENCE_GPIO = 6;
-  static const int PRESENCE_POLL_INTERVAL_MS = 5000; // Poll every 5 seconds
- static time_t last_presence_time = 0;
- static bool backlight_on = true;
- static bool presence_sensor_active = false; // To control sensor task activity
-
  #define WIFI_MAXIMUM_RETRY 5
 #define NTP_SERVER "pool.ntp.org"
 
@@ -179,9 +170,6 @@
  static void time_update_timer_cb(lv_timer_t *timer);
  static void update_hourly_forecast(void);
  static void update_daily_forecast(void); // Forward declaration
- 
- // Presence Sensor functions
- static void presence_sensor_task(void *pvParameters);
  
  /**
   * @brief// IP address acquisition event handler for WiFi
@@ -646,15 +634,8 @@ static void weather_update_timer_cb(lv_timer_t *timer)
      weather_update_timer = lv_timer_create(weather_update_timer_cb, 600000, NULL);
      
      // Perform initial time update, weather update will happen after WiFi connection
-     // update_time_display(); // Commented out: This will be handled by deferred_ui_init_cb
-     // Weather data update will be triggered after WiFi connection
+     update_time_display();
  }
-
-// Defer initial time display update to avoid LVGL dirty area modification during render
-static void deferred_ui_init_cb(lv_timer_t *timer) {
-    update_time_display();
-    lv_timer_del(timer); // Run only once
-}
 
 /**
  * @brief Main application entry point
@@ -662,7 +643,7 @@ static void deferred_ui_init_cb(lv_timer_t *timer) {
  void app_main(void)
  {
      // Suppress warning about unused TAG from waveshare_rgb_lcd_port.h
-     SUPPRESS_UNUSED_WARNING(TAG);
+     
      
      // Initialize the display first to ensure UI works regardless of time sync
      ESP_LOGI(MAIN_TAG, "Initializing Waveshare ESP32-S3 RGB LCD");
@@ -724,7 +705,7 @@ static void deferred_ui_init_cb(lv_timer_t *timer) {
 
      // Configure GPIO 6 as input for LD2410C AS output
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << LD2410C_PRESENCE_GPIO),
+        .pin_bit_mask = (1ULL << PRESENCE_SENSOR_GPIO),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -770,43 +751,13 @@ static void deferred_ui_init_cb(lv_timer_t *timer) {
      
      ESP_LOGI(MAIN_TAG, "App initialization complete, time source: %d", time_source);
          // Main loop to keep UI responsive
-    xTaskCreate(presence_sensor_task, "presence_sensor_task", 4096, NULL, 2, NULL);
+    presence_sensor_init();
     while (1) {
         ui_tick();
         vTaskDelay(pdMS_TO_TICKS(10)); // 10 ms delay
     }
  }
 
-// Presence Sensor Task
-#define PRESENCE_TIMEOUT_S 10  // Time (in seconds) after which backlight turns off if no presence
-
-static void presence_sensor_task(void *pvParameters)
-{
-    while (1) {
-        int presence = gpio_get_level(LD2410C_PRESENCE_GPIO); // GPIO 6 for LD2410C AS output
-        time_t now;
-        time(&now);
-
-        if (presence) {
-            ESP_LOGI("PRESENCE", "Human presence detected!");
-            last_presence_time = now;
-            if (!backlight_on) {
-                wavesahre_rgb_lcd_bl_on();
-                backlight_on = true;
-                ESP_LOGI("PRESENCE", "Backlight turned ON due to presence.");
-            }
-        } else {
-            ESP_LOGI("PRESENCE", "No presence detected.");
-            ESP_LOGI("PRESENCE", "now=%lld, last_presence_time=%lld, diff=%.1f", (long long)now, (long long)last_presence_time, difftime(now, last_presence_time));
-            if (backlight_on && difftime(now, last_presence_time) > PRESENCE_TIMEOUT_S) {
-                wavesahre_rgb_lcd_bl_off();
-                backlight_on = false;
-                ESP_LOGI("PRESENCE", "Backlight turned OFF after absence timeout.");
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(PRESENCE_POLL_INTERVAL_MS));
-    }
-}
 
 /**
  * @brief Update the daily forecast display

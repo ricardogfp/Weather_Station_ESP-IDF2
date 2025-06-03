@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "ui_actions.cpp" "weather_client.c" "waveshare_rgb_lcd_port.c" "main.c" "lvgl_port.c" "ds3231.c" "wifi_manager.c" 
+    SRCS "presence_sensor.c" "ui_actions.cpp" "weather_client.c" "waveshare_rgb_lcd_port.c" "main.c" "lvgl_port.c" "ds3231.c" "wifi_manager.c" 
         
          "UI/ui.c" "UI/eez-flow.cpp" "UI/screens.c"
          "UI/images.c" "UI/styles.c" "home_assistant.c"
