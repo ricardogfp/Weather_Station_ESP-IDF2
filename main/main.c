@@ -459,7 +459,9 @@
         } else {
             ESP_LOGE(MAIN_TAG, "Image icon for hour %d is NULL", i);
         }
-        
+        lv_label_set_text(objects.label_city, OPENWEATHER_CITY);
+        lv_label_set_text(objects.label_city_1, OPENWEATHER_CITY);
+
         // Small delay to allow LVGL to process events
         vTaskDelay(pdMS_TO_TICKS(10));
     }
