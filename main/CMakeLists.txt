@@ -11,7 +11,7 @@ idf_component_register(
          "UI/images/ui_image_icon_13d_13n_72p.c" "UI/images/ui_image_icon_50d_50n_72p.c"
          "UI/images/ui_image_cockpit.c" "UI/images/ui_image_plane.c"
     INCLUDE_DIRS "." "UI"
-    REQUIRES esp_http_client json nvs_flash esp_event esp_wifi esp_netif esp-tls vl53l1x driver)
+    REQUIRES esp_http_client json nvs_flash esp_event esp_wifi esp_netif esp-tls driver)
 
 idf_component_get_property(lvgl_lib lvgl__lvgl COMPONENT_LIB)
 target_compile_options(${lvgl_lib} PRIVATE -Wno-format)
